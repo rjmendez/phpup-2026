@@ -1,16 +1,25 @@
-title: phpup-2026 IDS Alert for session.upload_progress Exploitation
+title: phpup-2026 IDS Alert for rfc1867 OOM-Amplification / Bailout State Corruption
 id: 6a2f8d14-5b9e-4c3a-8f1d-2e7b4a6c9d0f
 status: stable
 description: |
-  Maps to the generic (non-PoC-literal) Suricata rules in rules/suricata.rules
-  — spray-sized body (9109628), dangerous-function marker (9109629), forged
-  zend_fcall_info/zval structural match (9109630), and the hostbit-correlated
-  outbound connection from a marked server (9109632). Alert signature_ids are
-  defined by this repo's suricata.rules and must match the deployed ruleset.
+  2026-10-21 rewrite: the prior revision of this rule mapped to Suricata
+  SIDs (9109628-9109630, 9109632) built on the now-retired single-request
+  spray/byte-offset mechanism -- see ANALYSIS.md and rules/suricata.rules'
+  own "retired" section. This maps instead to the SIDs that survived that
+  rewrite: the duplicate Content-Disposition header (9109633) and header-
+  density (9109634) signals, grounded directly in the real fix commit's
+  rfc1867.c changes, and the empty-file-field signal (9109635). These are
+  IDS-category (not webserver-category) because they need actual HTTP
+  body inspection (Suricata's http.request_body), which standard web
+  server access logs do not capture -- see phpup2026-feature-presence.yml
+  for the equivalent webserver-only precondition signal. Alert
+  signature_ids are defined by this repo's suricata.rules and must match
+  the deployed ruleset.
 references:
   - https://github.com/rjmendez/phpup-2026
 tags:
   - attack.t1190
+  - cve.2026.109618
   - cve.2026.109619
 logsource:
   category: ids
@@ -18,12 +27,13 @@ logsource:
 detection:
   selection:
     alert.signature_id:
-      - 9109628
-      - 9109629
-      - 9109630
-      - 9109632
+      - 9109633
+      - 9109634
+      - 9109635
   condition: selection
 falsepositives:
-  - 9109628 alone (spray-sized body) can fire on unusually large legitimate
-    uploads; weight 9109629/9109630 (payload content) higher
+  - 9109634/9109635 are density-based approximations (Suricata has no
+    native occurrence-count keyword) and need tuning against this
+    deployment's real multi-file-upload traffic; weight 9109633
+    (exact duplicate-header match) higher
 level: high

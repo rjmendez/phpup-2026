@@ -1,218 +1,180 @@
-# PHP session.upload_progress UAF — CVE-2026-109619
+# PHP Bailout State Corruption - CVE-2026-109618 / CVE-2026-109619
 
 **CVSS v4.0 9.2 · unauth · default config · PHP 8.x pre-2026-10-21**
 
-> **2026-10-21 correction.** PHP's official advisory (published today, see
-> `README.md`) splits this bug class into two CVEs with *different root
-> causes*: **CVE-2026-109619** ("RCE via stale global state") and
-> **CVE-2026-109618** ("RCE via OOM corruption" — out-of-memory handling
-> interrupting partially-initialized request data, unrelated to
-> `session.upload_progress`). Everything below — including what an earlier
-> version of this document labeled "CVE-2026-109618" — is the
-> `php_session_rfc1867_progress` stale-pointer mechanism and maps to
-> **CVE-2026-109619 only**. CVE-2026-109618 is a separate bug this repo has
-> not analyzed; it has no coverage in `rules/` or `iocs.json`. See
-> `HARDENING.md` for its own (different) mitigations.
-
-Fixed in PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (all released 2026-10-21) —
-[official advisory](https://www.php.net/archive/2026.php#2026-10-21-5).
-
-> **2026-10-21 mechanism finding.** Read against real `php/php-src`
-> (`ext/session/session.c`), the UAF described below does not hold up.
-> `progress->data` is `Z_TRY_ADDREF`'d *before* being inserted into
-> `$_SESSION`, so it is never owned only by the session array —
-> `php_session_track_init()` tearing down the old `$_SESSION` on the next
-> `update()` drops the refcount to 1, not 0, and the backing `arData` is
-> never actually freed. Confirmed empirically, not just by reading the
-> code: a real PHP 8.3.6 + nginx lab, given the exact precondition below
-> (two files, a genuine 2-second stall between them, forcing the second
-> `php_session_rfc1867_update()` call), returned a clean `200 OK` with no
-> crash, warning, or corruption — see
-> `examples/logs/phpup2026-nginx-stall-no-crash.log`. Treat the mechanism
-> below as the documented *intent* of the (corrected) CVE-2026-109619
-> research, not as a reproduced, currently-working exploit.
+> **2026-10-21 rewrite.** Everything below is grounded in the actual PHP
+> security fix - commit `82f8f31b16a` ("Avoid state corruption via
+> bailout"), branch `PHP-8.0-CVE-2026-109618-109619` in `php/php-src` -
+> not in the leaked PoC artifact's own claims. An earlier version of this
+> document described a single-request, multipart-stall heap-spray
+> mechanism (149 `t[]` fields, a forged `zend_fcall_info` at fixed byte
+> offsets, `FILLUNIT`/delta tables). **That mechanism is deleted, not
+> caveated.** It doesn't match the real fix; a real lab reproduction of
+> its documented precondition produced a clean `200 OK`, not a crash; and
+> VulnCheck independently reports that none of the public PoCs they
+> reviewed have the correct mechanism. If you have the old revision of
+> this file cached anywhere, discard it.
 
 ---
 
-## Bug
+## Root cause: a `longjmp` that skips cleanup
 
-`php_session_rfc1867_callback` (ext/session/session.c) tracks multipart upload
-progress by caching two raw `zval*` bucket pointers in
-`php_session_rfc1867_progress`:
+PHP's internal allocator (`zend_mm_safe_error`, `Zend/zend_alloc.c`)
+handled an out-of-memory or integer-overflow condition like this, before
+the fix:
 
 ```c
-zval *post_bytes_processed;         /* php_session.h:136 — armed session.c:3316 */
-zval *current_file_bytes_processed; /* php_session.h:137 — armed session.c:3342 */
+heap->overflow = 1;
+zend_try {
+    zend_error_noreturn(E_ERROR, format, ...);   // itself can longjmp
+} zend_catch {
+} zend_end_try();
+heap->overflow = 0;
+zend_bailout();        // unconditional longjmp, always taken
+exit(1);               // never reached
 ```
 
-Both are captured via `zend_hash_str_find` with no addref and never refreshed
-across `php_session_initialize()` calls. Neither is a reference-counted handle;
-each is a raw offset into a HashTable's `arData` block.
+`zend_bailout()` is PHP's internal `setjmp`/`longjmp`-based error-recovery
+mechanism - it unwinds the C call stack back to a recovery point,
+*skipping whatever cleanup code was between the jump point and the
+allocation failure*. If that skipped cleanup was supposed to finish
+initializing or tearing down a data structure, the structure is left
+half-done while the worker process survives and goes on to handle
+further requests.
 
-A timed stall between two multipart chunks — longer than
-`session.upload_progress.min_freq` (default 1 s) — forces a second `update()`.
-Inside `update()`, `php_session_initialize()` calls `php_session_track_init()`
-which calls `zval_ptr_dtor` on the prior decoded session tree, freeing the
-`arData` both pointers point into. Subsequent `Z_LVAL_P` writes at session.c:3355
-and 3356 land in freed memory.
+The fix replaces this entirely:
 
----
-
-## One CVE, two delivery paths
-
-Both paths below are CVE-2026-109619 — they share the same root cause (a
-cached raw `zval*` dangling after `php_session_initialize()` frees the
-HashTable it points into) and differ only in which pointer and which chunk
-sequence triggers it. An earlier revision of this document attributed the
-second path to "CVE-2026-109618"; that was a misattribution — see the
-correction note at the top of this file.
-
-**Path A** — `post_bytes_processed` (session.c:3356)
-
-Armed once at the first `MULTIPART_EVENT_FILE_START`, never refreshed on later
-`FILE_START` events. Two-file delivery: file 1 triggers `update#1`; stall >1 s;
-file 2 `FILE_DATA` triggers `update#2` (free), then stale `Z_LVAL_P` write.
-
-**Path B** — `current_file_bytes_processed` (session.c:3355)
-
-Re-armed at every `FILE_START`, but `current_file` is immediately moved into
-`files[]` via `add_next_index_zval` (`ZVAL_COPY_VALUE`, no addref) — leaving the
-array double-owned at refcount 1. When `update()` frees the prior decoded tree,
-the aliased `current_file` arData dangles. Single-file delivery: 149 `t[]` spray
-first, one file, three chunks (c1 / stall / c2+c3).
-
----
-
-## Spray and payload
-
-149 multipart `t[]` fields (nTableSize 256, 320-byte `zend_string` bins) reclaim
-the freed `arData` slot. Each 288-byte blob is a forged `zend_fcall_info`:
-
-| offset | value | meaning |
-|--------|-------|---------|
-| +0 | `0x40` (LE qword) | `size` = FCI = 64 |
-| +8 | `call_addr` | `function_name` / fn ptr |
-| +16 | `0x106` (LE dword) | `IS_STRING_EX` |
-| +48 | `0x1` (LE dword) | `param_count` = 1 |
-| +64 | `0x1` (byte) | `ZEND_INTERNAL` |
-| +152 | `call_addr` | `handler` (HANDLER_OFF = 64+88) |
-| +160 | `0x308` (LE dword) | `IS_OBJECT_EX` |
-| +200 | `system\0<cmd>\0` | command string (BIN_OFF) |
-
-The stale `Z_LVAL_P` write steers the handler field to `zend_call_function`,
-which executes `system(<cmd>)` as the PHP process user.
-
----
-
-## ASLR
-
-`call_addr = zval_ptr_dtor - delta_call`. Delta is per-build, not portable:
-
-| build | delta |
-|-------|-------|
-| Ubuntu PHP 8.5.4 profile-21 (author PoC) | `0x43EF0` |
-| lsphp82 8.2.34 bookworm | `0xc930` |
-| lsphp82 8.2.34 noble | `0xcef0` |
-| lsphp82 8.2.34 jammy | `0xd060` |
-
-Wrong delta crashes a worker (DoS). Deltas for all three LiteSpeed 8.2.34
-sub-builds are closed from official `-dbg` symbols.
-
----
-
-## Adjacent write paths
-
-`MULTIPART_EVENT_FILE_END` (session.c:3375) writes through `post_bytes_processed`
-again — same stale pointer, same preconditions as CVE-2026-109619.
-
-`MULTIPART_EVENT_END` with `rfc1867_cleanup=0` (default, session.c:3388-3390):
-`SEPARATE_ARRAY(&progress->data)` COW-copies when refcount > 1 (after any
-`update()`), then `Z_LVAL_P(post_bytes_processed)` writes to the old, still-live
-arData. `php_session_initialize()` inside `update(force=1)` then frees it, but the
-pointer is never read again. **Logic bug, not an independently exploitable UAF.**
-
----
-
-## Codebase survey
-
-Source surveyed: ext/session/session.c, php_session.h, main/rfc1867.c,
-Zend/zend_hash.c/h, zend_types.h, zend_fibers.c, zend_generators.c (PHP-8.4,
-commit b9ea38ef, pre-patch).
-
-The stale-`zval*`-bucket-pointer pattern is **unique to
-`php_session_rfc1867_progress`**. Specifically:
-
-- All other `zend_hash_str_find` stores in session.c target local variables
-  (`data`, `ppid`, `cancel_upload`) scoped within the calling function.
-- `zend_fiber_vm_state::vm_stack_top/end` are VM stack pointers, not HashTable
-  bucket pointers — captured from and restored to `EG()` atomically at
-  yield/resume.
-- `zend_hash_iterator_pos_ex` (zend_hash.c:639) inlines `SEPARATE_ARRAY` but
-  immediately re-fetches the iterator pointer (`iter = EG(ht_iterators) + idx`)
-  in case `EG(ht_iterators)` was reallocated — the correct pattern.
-- Generator `fast_call` (`ZEND_CALL_VAR` into execute_data) is local scope,
-  never persisted.
-
----
-
-## Fix
-
-**Replace `zval*` with `zend_long` in `php_session_rfc1867_progress`.** Write
-the scalar values directly; sync back to the HashTable via a fresh
-`zend_hash_str_find` call after each `php_session_initialize()` returns.
-
-Re-anchoring inside `update()` (option B) is incomplete: the
-`MULTIPART_EVENT_END` stale write at session.c:3390 occurs *before* the
-`update()` call, so a re-anchor inside `update()` does not protect it.
-
----
-
-## History
-
-Bug present since PHP 5.4 (upload_progress introduction). Precursor:
-CVE-2020-7062 — NULL dereference in the same `MULTIPART_EVENT_END` /
-`cleanup=0` handler, fixed by adding the `Z_ISUNDEF(progress->data)` guard
-still present today. The raw pointer caching was not addressed.
-
-Patched 2026-10-21: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 —
-[advisory](https://www.php.net/archive/2026.php#2026-10-21-5). PHP 8.1 and
-older receive no fix from the PHP project (some distros/LTS vendors
-backport — check with your vendor). PHP 5/6/7 are long EOL.
-
----
-
-## Detection
-
-```
-required fields:  PHP_SESSION_UPLOAD_PROGRESS + PHPSESSID in a multipart POST
-spray geometry:   body >> legitimate form-field overhead
-payload content:  dangerous-function string inside the upload_progress context
-structural match: @+16: 06 01 00 00 (IS_STRING_EX)  @+160: 08 03 00 00 (IS_OBJECT_EX)
+```c
+ZEND_API ZEND_COLD ZEND_NORETURN void zend_mm_safe_error_ex(const char *format, ...)
+{
+    /* ...build message... */
+    fprintf(stderr, "\nFatal error: %s in %s on line %d\n", ...);
+    _exit(1);          // hard process exit - no longjmp, no userland error path
+}
 ```
 
-Rules: `rules/suricata.rules`, `rules/yara.yar`, `rules/sigma/`, `rules/sentinel/`.
-Scope: CVE-2026-109619 only. CVE-2026-109618 ("RCE via OOM corruption" per
-the official advisory) is a separate, unanalyzed bug with no detection
-coverage here.
+This is **CVE-2026-109618** (GHSA-w8hw-w9fx-j79w, "RCE via OOM
+corruption"): an allocator-level OOM/overflow triggers a `longjmp`
+mid-operation. The advisory's own wording - *"the patch removes
+`longjmp()` for OOM"* - matches this diff exactly.
 
-PoC literals (`B7kQpoc61*`, `php2shell-*`, `a1b2c3d4e5f6a7b8c9d0e1f2a3`, `JACKALPOC`) → `this_artifact_only` in `iocs.json`.
+## The cross-request half: CVE-2026-109619
 
----
+(GHSA-6wmf-4rv5-p3rp, "RCE via stale global state".) A `longjmp` out of
+one request can also skip the normal reset of several globals that live
+for the **life of the worker process**, not just one request. The fix
+adds explicit resets for each, several with comments stating outright
+that the field can be read by a **later, different request on the same
+worker**, before that request's own initialization has run:
 
-## Mitigation
+| Global | Normal reset point | Confirmed risk if skipped |
+|---|---|---|
+| `EG(user_error_handler)`, `EG(user_exception_handler)`, `EG(user_error_handlers)`, `EG(user_exception_handlers)` | `shutdown_executor()` | read by `zend_error_zstr_at`, "before init_executor" (code comment) |
+| `EG(exception)`, `EG(error_handling)` | `shutdown_executor()` | same - same comment |
+| `EG(objects_store)` (`object_buckets`, `top`) | `shutdown_executor()` | dangling pointer into the freed previous request's object store |
+| `PG(http_globals)[]` (`$_GET`/`$_POST`/`$_COOKIE`/etc. zvals) | `php_request_shutdown()` | "May be accessed before php_request_startup()" (code comment) |
+| `PG(modules_activated)` | `php_request_shutdown()` | same |
+| `SG(request_info).auth_user`/`auth_password`/`auth_digest`/`content_type_dup`/`current_user` | `sapi_deactivate_module()` | freed but never nulled before the fix - a textbook dangling pointer |
 
-```ini
-session.upload_progress.enabled = 0
-```
+**Confirmed early-reading consumers** - code that runs on the new request
+before `init_executor()`/`php_request_startup()` resets the above:
+- PHP's own error-reporting path (`zend_error_zstr_at`), reachable via
+  certain INI diagnostics applied very early (e.g. `.htaccess`/
+  `php_value` under mod_php).
+- **`php_session_rfc1867_callback`** - the `session.upload_progress`
+  multipart hook (`ext/session/session.c`). Confirmed by this fix's own
+  EOL-branch handling: PHP 8.0 doesn't get the full fix backported, only
+  a one-line "minimal mitigation" -
+  `if (!PS(rfc1867_enabled) || true) { return retval; }` - the `|| true`
+  permanently disables the function. That's the PHP security team saying
+  "we can't fix this old branch properly, so turn the consumer off,"
+  which is as direct a confirmation as this file gets.
 
-Patched: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (2026-10-21). PHP 5/6/7 are
-permanently exposed. This mitigation and these patch versions address
-CVE-2026-109619 only — see `HARDENING.md` for CVE-2026-109618's unrelated
-OOM-corruption mitigations.
+## Producer: how an attacker reaches the `longjmp`
 
----
+CVE-2026-109618's advisory names the practical OOM trigger, and the fix
+diff confirms it was real and has been closed:
 
-*Artifact: `http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz`*  
-*SHA256: `0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63`*  
-*Original research: J4ck3LSyN / Acd421 / Arch&Yuki / Atlas*  
-*CVE-2026-109618 independently confirmed: watchTowr*
+- Multipart requests without a usable declared `Content-Length` bypass
+  the initial `post_max_size` check.
+- **A single multipart part could carry an unlimited number of headers**
+  before the fix - `main/rfc1867.c`'s `multipart_buffer_headers()`
+  previously saved every header line unconditionally. The fix restricts
+  it to two header types (`Content-Disposition`, `Content-Type`) and
+  skips duplicates via a new `php_mime_get_hdr_value()` lookup. Each
+  saved header costs far more memory inside PHP than its size on the
+  wire - this, not a 149-field array, is the real amplification vector.
+- Empty file fields don't count toward `max_file_uploads` but still
+  create file-metadata arrays; nested field names multiply that cost
+  further.
+
+## The heap-spray/reclaim step - real, differently triggered
+
+Separate from *how* the bug is triggered, the fix also hardens *how the
+freed memory gets reclaimed*: `main/php_variables.c` now initializes
+`$_POST`/`$_GET`/`$_COOKIE` with a new `array_init_singleton()`
+(`Zend/zend_hash.c`'s `zend_new_array_singleton()`, forcing
+`nTableSize = 1`) instead of the default, dynamically-sized
+`array_init()`. Forcing these superglobal containers to the smallest
+possible table size is a direct defense against an attacker shaping
+request data to control what lands in a freed slot.
+
+So: **the heap-spray/reclaim *technique* in the original analysis of this
+artifact was real.** What was wrong was the *trigger* - it is not a
+same-request stall creating a same-request UAF. It's a `longjmp` on one
+(producer) request leaving worker-global state dangling, consumed by a
+**later, different request** (consumer) on the **same worker**, before
+that request's own initialization has run.
+
+## What we have NOT reproduced
+
+- An end-to-end RCE, or even a confirmed crash/ASAN use-after-free,
+  under the real trigger (header-explosion OOM on a producer request,
+  followed by an `upload_progress` or early-error-path consumer request
+  on the same worker).
+- Which early-init paths beyond `php_session_rfc1867_callback` and
+  `zend_error_zstr_at` are reachable in a default configuration.
+
+Needs a debug/ASAN PHP build and a pinned (`pm=static`, small pool)
+php-fpm/mod_php lab, forcing worker reuse so a producer and consumer
+request are guaranteed to land on the same process. Tracked as open
+follow-up work, not claimed as done.
+
+## Patch
+
+Fixed in PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (2026-10-21) via the
+"avoid state corruption via bailout" hardening above. Source-only
+backports exist for 7.4/8.0/8.1; the 8.0 backport disables the
+`session.upload_progress` consumer path outright rather than backport
+the full fix. **No complete generic configuration mitigation exists**
+per the PHP advisory. `session.upload_progress.enabled = 0` closes one
+confirmed consumer path; `fatal_error_backtraces = 0` (PHP 8.5 only)
+closes the strongest confirmed producer path; neither closes all
+variants. See `HARDENING.md`.
+
+A mitigation this file didn't have before, newly derivable from the
+cross-request mechanism itself: **preventing worker reuse** (`php-fpm`
+`pm.max_requests = 1`, or the mod_php/Apache equivalent
+`MaxConnectionsPerChild 1`) makes the consumer step structurally
+impossible - no later request can ever land on a worker a prior request
+left corrupted, because that worker never serves a second request. This
+has an obvious performance cost and is not a substitute for patching.
+
+## References
+
+- Fix commit: `php/php-src` `82f8f31b16a` ("Avoid state corruption via
+  bailout"), branch `PHP-8.0-CVE-2026-109618-109619`.
+- https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp (CVE-2026-109619)
+- https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w (CVE-2026-109618)
+- VulnCheck: https://www.vulncheck.com/blog/php2shell-vulnerabilities - *"none of the public PoCs we reviewed have the correct mechanism"*
+- `ikow/php2shell-poc`'s "Chain E" hypothesis (session OOM in
+  `php_var_unserialize` leaving `BG(unserialize).level` dirty, consumed
+  by a later `upload_progress` request, logging `"Session object
+  destruction failed"`) is structurally plausible - `BG(unserialize)`'s
+  reentrancy-guard pattern and that exact log string are both real,
+  confirmed in `ext/standard/var_unserializer.re` and
+  `ext/session/session.c:183,2308` - but is a *different* specific chain
+  from the one the official fix commit's diff footprint maps onto most
+  directly, and has not been independently reproduced by this repo.
+
+*Artifact analyzed: `http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz`, SHA256 `0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63`. Given VulnCheck's finding, this artifact's own documented mechanism should not be assumed to be a working exploit for the real CVE - see `iocs.json`'s `this_artifact_only` section, kept only as blocklist-grade IOCs for the artifact itself, not as a description of the real vulnerability.*

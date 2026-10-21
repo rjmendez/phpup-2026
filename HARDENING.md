@@ -1,86 +1,97 @@
-# Hardening guide — CVE-2026-109618 / CVE-2026-109619
+# Hardening guide - CVE-2026-109618 / CVE-2026-109619
 
-> **Scope note (2026-10-21):** per PHP's official advisory, these are two
-> unrelated bugs. Layers 1–6 below (session.upload_progress, spray/RCE
-> chain-breaking, process isolation, detection) address **CVE-2026-109619**
-> only, the bug this repo researched. **CVE-2026-109618** is a separate
-> OOM-corruption issue — its own mitigations are in the "CVE-2026-109618"
-> section below; this repo has no detection rules for it.
+> **2026-10-21 rewrite.** An earlier revision of this file treated the two
+> CVEs as unrelated and covered only CVE-2026-109619, based on the leaked
+> PoC artifact's own (incorrect) mechanism claims. Both CVEs are fixed by
+> the same `php/php-src` commit (`82f8f31b16a`, "Avoid state corruption via
+> bailout") and share the same root-cause class - a `longjmp`-based
+> "bailout" that can skip cleanup code and leave worker-persistent global
+> state dangling for a later request on the same worker to read. See
+> `ANALYSIS.md` for the full mechanism writeup. This guide now covers both
+> together.
 
-Defense-in-depth ordered by impact. Each layer is independent; apply all that fit
-your deployment.
+Defense-in-depth, ordered by impact. Apply every layer that fits your
+deployment - no single layer here is a complete fix; only patching is.
 
 ---
 
-## Layer 1 — Eliminate the attack surface
+## Layer 1 - Eliminate the attack surface
 
-**Primary mitigation.** Disables the vulnerable code path entirely.
+**Primary mitigation: patch.**
+
+```
+PHP 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 - released 2026-10-21, fixes both CVEs.
+```
+
+PHP 5/6/7 are EOL and will not be patched. PHP 8.1 and older get no fix
+from the PHP project (source-only backports exist for 7.4/8.0/8.1 - the
+8.0 backport disables the `session.upload_progress` consumer path
+outright rather than backport the full fix; check with your distro/LTS
+vendor for further backports).
+
+**No complete generic configuration mitigation exists** per the PHP
+advisory. The confirmed partial mitigations, all of which must be set in
+`php.ini`, an FPM pool, or server config applied *before* request parsing
+- not via `ini_set()` or FPM `.user.ini`, which apply too late - followed
+by a restart of every worker:
 
 ```ini
-; php.ini or .htaccess or per-pool php_admin_value
+; closes the confirmed session.upload_progress consumer path (CVE-2026-109619)
 session.upload_progress.enabled = 0
-```
 
-Verify: `php -r "echo ini_get('session.upload_progress.enabled');"`  — must print `0`.
-
-Per the official advisory, three more CVE-2026-109619 mitigations beyond
-disabling the feature:
-
-```ini
-; PHP 8.5 only — blocks the confirmed fatal-backtrace path
+; PHP 8.5 only - closes the strongest confirmed producer path (CVE-2026-109619)
 fatal_error_backtraces = 0
-```
 
-- Remove invalid or deprecated settings applied per request that emit
-  diagnostics before initialization — `error_reporting`, `display_errors`,
-  or `@` do not help, since they hide the diagnostic without closing the gap.
-- Fix attacker-reachable fatal errors and execution timeouts, including
-  failures in callbacks, upload or import processing, and cleanup.
-
-All of the above must be set in `php.ini`, an FPM pool, or server config
-applied *before* request parsing — not via `ini_set()` or FPM `.user.ini`,
-which apply too late. Restart every worker after changing them.
-
-**Patch** to PHP 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 (released 2026-10-21) —
-fixes CVE-2026-109619. PHP 5/6/7 are EOL and will not be patched; PHP 8.1 and
-older get no fix from the PHP project.
-
----
-
-## CVE-2026-109618 — OOM corruption (separate bug, not covered by Layers 1–6 or by `rules/`)
-
-Unrelated to `session.upload_progress`. Per the official advisory: out-of-memory
-handling can interrupt PHP while internal request data is only partially
-initialized; request cleanup may then treat the invalid data as valid. This
-repo has not researched the trigger path and has no detection rules for it —
-these are the official advisory's interim mitigations only.
-
-```ini
-; Lock the memory limit so no pool/app override reintroduces a finite limit
-; that can fail mid-request. Set via php_admin_value, not php_value.
+; reduces exposure to the confirmed OOM producer trigger (CVE-2026-109618):
+; lock the memory limit so no pool/app override reintroduces a finite
+; limit that can fail mid-request. Set via php_admin_value, not php_value.
 memory_limit = -1
-
-; Keep decoded request bodies small enough that hitting this path is rare.
 post_max_size = 8M        ; 32M if the app needs file uploads
 upload_max_filesize = 8M  ; must stay below post_max_size
 ```
 
-- Enforce limits at the web server/proxy level too: decoded request size,
-  input field count, multipart part count, header count, and nesting depth —
-  including requests with no usable `Content-Length`.
+Also:
+- Remove invalid/deprecated settings applied per request that emit
+  diagnostics before initialization - `error_reporting`, `display_errors`,
+  or `@` do not help; they hide the diagnostic without closing the gap.
+- Fix attacker-reachable fatal errors and execution timeouts, including
+  failures in callbacks, upload or import processing, and cleanup.
 - Use a container/cgroup memory limit as an availability boundary, with a
-  policy that kills only the affected worker. **Do not** use `RLIMIT_AS` or
-  `RLIMIT_DATA` instead — those can themselves cause the vulnerable
-  allocation failure.
+  policy that kills only the affected worker. **Do not** use `RLIMIT_AS`
+  or `RLIMIT_DATA` instead - those can themselves trigger the vulnerable
+  allocation-failure path.
 
-None of this makes an installation safe; only patching does.
+### New: prevent worker reuse
+
+Derived directly from the real mechanism (not in the prior revision of
+this file): the vulnerability requires a *later, different request* to
+land on the *same worker process* a prior request left corrupted. If no
+worker ever serves a second request, that consumer step is structurally
+impossible.
+
+```ini
+; php-fpm pool config - kill and respawn the worker after every request
+pm = static
+pm.max_requests = 1
+```
+
+```apache
+# Apache mod_php / prefork equivalent
+MaxConnectionsPerChild 1
+```
+
+This has an obvious, significant performance cost (no worker reuse at
+all) and is not a substitute for patching - treat it as a short-term
+circuit-breaker for a high-value target you can't patch immediately, not
+a standing configuration.
 
 ---
 
-## Layer 2 — Break the exploit chain (defense-in-depth)
+## Layer 2 - Break the exploit chain (defense-in-depth)
 
-The exploit ends with a call to `system()`. Disabling dangerous functions makes
-RCE impossible even if the UAF fires and the spray lands.
+If a RCE chain does get reached, disabling dangerous functions stops it
+at the call regardless of how the UAF was triggered or what reclaimed
+the freed memory:
 
 ```ini
 disable_functions = system,exec,shell_exec,passthru,popen,proc_open,
@@ -88,24 +99,26 @@ disable_functions = system,exec,shell_exec,passthru,popen,proc_open,
                     posix_setgid,pcntl_signal
 ```
 
-Note: `disable_functions` is php.ini-only — cannot be overridden by `.htaccess` or `ini_set()`. Set in php.ini or the fpm pool's `php_admin_value`.
+`disable_functions` is `php.ini`-only - cannot be overridden by
+`.htaccess` or `ini_set()`. Set in `php.ini` or the FPM pool's
+`php_admin_value`.
 
-**Custom session save handlers increase exploitability.** With `session_set_save_handler()` or `session.save_handler=user`,
-arbitrary PHP executes inside `php_session_initialize()`, making the UAF stall
-window more reliable. If you use Redis/Memcached sessions:
-
+**Custom session save handlers increase exploitability.** With
+`session_set_save_handler()` or `session.save_handler=user`, arbitrary
+PHP executes inside `php_session_initialize()`. If you use
+Redis/Memcached sessions:
 - Audit whether `session.upload_progress.enabled` can simply be `0`.
-- If not, lock the pool to file handler for PHP endpoints that accept uploads:
-  `php_admin_value[session.save_handler] = files`
+- If not, lock the pool to the file handler for PHP endpoints that
+  accept uploads: `php_admin_value[session.save_handler] = files`
 
 ---
 
-## Layer 3 — Process isolation (limit post-RCE impact)
+## Layer 3 - Process isolation (limit post-RCE impact)
 
 ### php-fpm pool hardening
 
 ```ini
-; Dedicated low-privilege user — not shared www-data
+; Dedicated low-privilege user - not shared www-data
 user  = php-app
 group = php-app
 
@@ -184,29 +197,35 @@ Set `extUser`/`extGroup` to a dedicated account, not `nobody` or `apache`.
 
 ---
 
-## Layer 4 — Web server / network controls
+## Layer 4 - Web server / network controls
 
-### Request size limits
+### Multipart request limits
 
-The exploit body is 50–70 KB (149 × 320-byte blobs + headers). Setting a
-tight limit on upload endpoints breaks the spray.
+2026-10-21: the prior revision of this section sized these limits around
+the (now-retired) spray mechanism's claimed 50-70 KB body. The real,
+fix-confirmed amplification vector is **header count per multipart
+part**, not overall body size - `main/rfc1867.c` previously saved every
+header line in a part unconditionally; a single part with an unbounded
+number of headers costs far more memory inside PHP than on the wire.
+Limit what you can at the web server/proxy layer:
 
 ```nginx
-# nginx — per-location on upload endpoints
+# nginx - general hygiene; does not by itself cap headers-per-part
 location ~ \.php$ {
-    client_max_body_size 1m;   # tune to your max legitimate upload
+    client_max_body_size 8m;   # tune to your real max legitimate upload
 }
 ```
 
 ```apache
-# Apache
-LimitRequestBody 1048576
+LimitRequestBody 8388608
 ```
 
-```
-# LiteSpeed
-maxReqBodySize  1M    # in MB, per vhost security settings
-```
+Most web servers/proxies don't have a dedicated "max headers per
+multipart part" knob - if yours does (a capable WAF/ModSecurity rule
+set, or an L7 proxy with MIME-aware inspection), use it. Otherwise this
+is a real coverage gap this repo hasn't closed; `rules/suricata.rules`'s
+duplicate/density signals are the best currently-available mitigation at
+the network layer, with the caveats documented there.
 
 ### Rate-limit multipart POST
 
@@ -223,7 +242,7 @@ If your app doesn't use PHP's built-in upload progress at all, strip the field
 before it reaches PHP:
 
 ```nginx
-# nginx — remove the header at the proxy edge
+# nginx - remove the header at the proxy edge
 # Requires lua-nginx or a WAF; simpler: block via ModSecurity / NAXSI rule:
 SecRule REQUEST_BODY "@contains PHP_SESSION_UPLOAD_PROGRESS" \
     "id:1000001,phase:2,deny,status:403,msg:'phpup-2026 upload-progress trigger'"
@@ -232,19 +251,19 @@ SecRule REQUEST_BODY "@contains PHP_SESSION_UPLOAD_PROGRESS" \
 ### Egress filtering
 
 ```bash
-# iptables — drop outbound from php-app user except to known services
+# iptables - drop outbound from php-app user except to known services
 iptables -A OUTPUT -m owner --uid-owner php-app -d 10.0.0.0/8 -j ACCEPT
 iptables -A OUTPUT -m owner --uid-owner php-app -j DROP
 ```
 
 ```
-# pf (OPNsense/FreeBSD) — block outbound from webserver
+# pf (OPNsense/FreeBSD) - block outbound from webserver
 block out quick on egress inet from <webserver_host> to ! <trusted_destinations>
 ```
 
 ---
 
-## Layer 5 — Session hardening
+## Layer 5 - Session hardening
 
 ```ini
 session.cookie_httponly   = 1    ; blocks JS from reading PHPSESSID
@@ -256,29 +275,32 @@ session.sid_length        = 48   ; longer SID (more entropy)
 session.sid_bits_per_character = 6
 ```
 
+None of these address the bailout/state-corruption mechanism directly;
+they're general session-security hygiene worth having regardless.
+
 ---
 
-## Layer 6 — Detection
+## Layer 6 - Detection
 
-Detections are in `rules/`:
+Detections are in `rules/` - see `ANALYSIS.md` and `README.md`'s
+"Detection philosophy" for what these actually cover and the honest
+limits (the cross-request "same worker" condition isn't visible from
+any of these log sources).
 
 | Format | File | Notes |
 |--------|------|-------|
-| Suricata 7+ | `rules/suricata.rules` | Tier-1: exact POC artifacts (private); Tier-2: payload markers; Tier-3: behavioral |
-| YARA 4+ | `rules/yara.yar` | Spray blob, source, distribution reference |
-| Sigma | `rules/sigma/` | 6 rules including process spawn and upload pattern |
-| Sentinel KQL | `rules/sentinel/phpup2026.kql` | 12 queries for W3CIISLog, DeviceProcessEvents, AzureDiagnostics |
-
-All of the above cover CVE-2026-109619 only; see the CVE-2026-109618 section
-above for that bug's mitigations (no rules exist for it here).
+| Suricata 7+ | `rules/suricata.rules` | Feature-presence (9109627) + OOM-amplification signals (9109633-9109635) + unvalidated post-exploitation placeholder (9109636) |
+| YARA 4+ | `rules/yara.yar` | Source/distribution fingerprint only - the old spray-blob rule is retired |
+| Sigma | `rules/sigma/` | Feature-presence, IDS-correlation (maps the new Suricata SIDs), process-spawn |
+| Sentinel KQL | `rules/sentinel/phpup2026.kql` | Feature-presence, OOM-amplification (Azure WAF body inspection required), process-spawn, hunting queries |
 
 Additional monitoring worth enabling:
 
 ```bash
-# auditd — execve by web process user
+# auditd - execve by web process user
 -a always,exit -F arch=b64 -S execve -F uid=php-app -k php-rce
 
-# php-fpm slow log (stall >1.5s is a red flag)
+# php-fpm slow log
 ; www.conf
 slowlog             = /var/log/php-fpm/slow.log
 request_slowlog_timeout = 2s
@@ -286,16 +308,22 @@ request_slowlog_timeout = 2s
 # Watch session directory for upload_progress_ keys
 inotifywait -m /var/lib/php/sessions -e create | \
     grep --line-buffered 'upload_progress_'
+
+# PHP error log - watch for OOM / fatal-error entries on upload-accepting
+# endpoints; the producer request may be invisible at the HTTP layer
+# (see ANALYSIS.md's "What we have NOT reproduced") but should still log
+grep -i "allowed memory size\|out of memory\|fatal error" /var/log/php*/error.log
 ```
 
 ---
 
 ## Quick-check priority order
 
-1. **Patch PHP** — released 2026-10-21 (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35), fixes both CVEs
-2. `session.upload_progress.enabled = 0` (CVE-2026-109619)
-3. `memory_limit = -1` (admin-locked) + tight `post_max_size`/`upload_max_filesize` (CVE-2026-109618)
-4. `disable_functions` includes `system,exec,shell_exec,passthru,popen`
-5. Dedicated process user + `seccomp`/AppArmor `execve` block
-6. Egress filter from web server process
-7. Load Suricata rules on edge (CVE-2026-109619 coverage only)
+1. **Patch PHP** - 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 (2026-10-21), fixes both CVEs
+2. `session.upload_progress.enabled = 0` + `fatal_error_backtraces = 0` (PHP 8.5)
+3. `memory_limit = -1` (admin-locked) + `post_max_size`/`upload_max_filesize`
+4. If unpatchable short-term: `pm.max_requests = 1` / `MaxConnectionsPerChild 1`
+5. `disable_functions` includes `system,exec,shell_exec,passthru,popen`
+6. Dedicated process user + `seccomp`/AppArmor `execve` block
+7. Egress filter from web server process
+8. Load the Suricata/Sentinel rules at the edge - know their real coverage limits first

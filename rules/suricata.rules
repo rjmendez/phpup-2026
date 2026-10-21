@@ -1,90 +1,97 @@
-# phpup-2026 — Suricata rules
-# CVE-2026-109619 · PHP session.upload_progress UAF · RCE
-# (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
-# official 2026-10-21 advisory; see README.md "Official status")
+# phpup-2026 - Suricata rules
+# CVE-2026-109618 / CVE-2026-109619 · PHP longjmp/bailout state corruption · RCE
 #
-# Detection is keyed on the vulnerability mechanics (required feature fields,
-# the forged zend_fcall_info / zval byte layout PHP's ABI dictates, and the
-# spray geometry needed to reclaim freed arData), NOT on any single exploit
-# tool's hardcoded boundary string, User-Agent, session ID, or output canary.
-# Those are trivial for an attacker to change; a rewritten PoC or a different
-# tool entirely will not carry them. Treat PoC-literal strings as IOCs for
-# that one released artifact (see iocs.json), not as a detection strategy.
+# 2026-10-21 rewrite. The prior revision of this file keyed on a
+# single-request multipart-stall heap-spray mechanism (149-field spray,
+# forged zend_fcall_info at fixed byte offsets, >40KB body threshold) that
+# was derived from the leaked PoC artifact's own claims. That mechanism
+# does not match the real fix (php/php-src commit 82f8f31b16a, "Avoid
+# state corruption via bailout") and those rules have been deleted, not
+# caveated - see ANALYSIS.md. The real mechanism is cross-request: a
+# longjmp-interrupted request leaves worker-persistent globals dangling,
+# consumed by a LATER, DIFFERENT request on the SAME worker process.
+# That "same worker" condition is not visible from HTTP/network logs at
+# all, so most of what's left here is the one piece that genuinely is
+# network-visible: the OOM-amplification technique on the producer
+# request (main/rfc1867.c's now-fixed unbounded per-part header count).
 #
-# SID range 9109627–9109632
+# One rule per physical line below - Suricata requires this (confirmed
+# against 7.0.3). `bsize`, not `dsize`, for the reassembled
+# http.request_body buffer (dsize is a raw per-packet match and cannot be
+# combined with http.* sticky buffers).
 #
-# One rule per physical line below (Suricata requires this — a rule split
-# across multiple lines, as an earlier revision of this file had it, fails
-# to parse; confirmed against Suricata 7.0.3). Verified against real
-# captures with distinct client/server IPs (examples/pcaps/,
-# examples/logs/phpup2026-eve-*.json): 9109627/9109628/9109629/9109630 all
-# fire as intended on real traffic. 9109631/9109632 were rewritten from
-# `hostbits` to `xbits` (see note below) and are confirmed to parse and
-# load, but NOT confirmed to fire end to end — this lab never produced a
-# genuine second, server-initiated outbound connection to correlate
-# against (there is no real RCE to generate one from; see ANALYSIS.md's
-# 2026-10-21 mechanism finding), so 9109631/9109632 remain unexercised.
-# An earlier version of this note claimed they fired, but that was on a
-# loopback capture where client and server shared one IP, which made the
-# xbit trivially self-match — not a real cross-host correlation.
+# SID range 9109627, 9109633-9109636 (9109628-9109632 retired below)
 
 # --- feature-presence / policy (low severity, high recall) ---
 
-# Precondition for CVE-2026-109619: PHP_SESSION_UPLOAD_PROGRESS field name present
-# alongside a PHPSESSID cookie in a multipart POST. This is also how the
-# legitimate upload-progress-bar feature is used, so this is inventory/policy
+# Precondition for the session.upload_progress consumer path specifically:
+# PHP_SESSION_UPLOAD_PROGRESS field name present alongside a PHPSESSID
+# cookie in a multipart POST. This is also how the legitimate
+# upload-progress-bar feature is used, so it is inventory/policy
 # visibility (who still has session.upload_progress reachable from the
-# internet), not an attack signal by itself.
+# internet), not an attack signal by itself. Unaffected by the mechanism
+# correction -- this is just "is the feature reachable."
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 session.upload_progress feature in use (multipart POST + PHPSESSID)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.cookie; content:"PHPSESSID="; nocase; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; classtype:policy-violation; sid:9109627; rev:1;)
 
-# --- spray geometry (medium severity) ---
+# --- OOM-amplification producer signal (medium-high confidence) ---
+#
+# Grounded directly in the fix diff: main/rfc1867.c's
+# multipart_buffer_headers() previously saved every header line in a
+# multipart part unconditionally; the fix restricts it to
+# Content-Disposition/Content-Type and skips duplicates. A legitimate
+# part has exactly one Content-Disposition header (optionally one
+# Content-Type). A SECOND Content-Disposition occurrence within a tight
+# byte window of the first is the duplicate-header pattern the fix
+# specifically closes -- real amplification, not an artifact of one PoC
+# tool's byte layout.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate Content-Disposition header in one multipart part (OOM-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"Content-Disposition"; content:"Content-Disposition"; distance:0; within:300; classtype:web-application-attack; sid:9109633; rev:1;)
 
-# Exploitation needs an oversized multipart body (many >=288-byte reclaim
-# blobs) to win the freed-arData race, far larger than a normal
-# progress-tracked upload's form fields. Threshold is deliberately generic
-# (not tied to the published PoC's 149-field layout) and should be tuned
-# against this deployment's normal upload sizes. Uses `bsize` on the
-# reassembled http.request_body buffer, not `dsize` — `dsize` is a raw
-# per-packet length match and Suricata rejects combining it with http.*
-# sticky buffers (confirmed: "combines packet specific matches ... with
-# stream / state matching").
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 oversized session.upload_progress multipart body (possible heap-spray)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.cookie; content:"PHPSESSID="; nocase; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; bsize:>40000; classtype:web-application-attack; sid:9109628; rev:1;)
+# Coarser amplification proxy: an unusually high density of
+# Content-Disposition/Content-Type header occurrences in a short span of
+# the body. Legitimate multi-file forms have one such header per file
+# field, spaced out by file content between them; many occurrences
+# packed into a small byte window is not normal legitimate usage.
+# Approximate by construction (Suricata has no native occurrence-count
+# keyword) -- tune the distance/within values against this deployment's
+# real multi-file-upload traffic before alerting on this alone.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 high header density in multipart body (possible OOM-amplification)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"Content-Disposition"; content:"Content-Disposition"; distance:0; within:2000; content:"Content-Disposition"; distance:0; within:2000; content:"Content-Disposition"; distance:0; within:2000; classtype:web-application-attack; sid:9109634; rev:1;)
 
-# --- payload content (high confidence) ---
+# --- empty file-field amplification (low-medium confidence) ---
+#
+# Advisory text: "Empty file fields don't count toward max_file_uploads
+# but still create file metadata arrays." Many zero-byte file parts in
+# one request is a cheap way to inflate internal metadata without
+# tripping the upload-count limit. Approximated here as many
+# filename="..." occurrences with an immediately-following empty body
+# section (blank line straight to the next boundary) -- validate against
+# real traffic before relying on this; it is the least precisely
+# modeled rule in this file.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 multiple empty file fields in multipart body (possible metadata-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"filename="; content:"filename="; distance:0; within:500; content:"filename="; distance:0; within:500; classtype:web-application-attack; sid:9109635; rev:1;)
 
-# A dangerous-function string is being delivered inside the upload_progress
-# context at all — generalized past `system` to the common command/code
-# execution sinks an attacker would pivot a forged zend_fcall_info to.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 dangerous function name in session.upload_progress body"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/R"; classtype:web-application-attack; sid:9109629; rev:1;)
+# --- post-exploitation (behavioral, unchanged in kind, low confidence) ---
+#
+# Still honestly speculative: we don't have a validated "exploitation
+# confirmed" signal to anchor a host-correlation marker on (the old
+# anchor, the forged-zval structural match, is retired above). This rule
+# is retained only as a generic, tool-agnostic "shell/worker spawned a
+# process that then talks out" indicator independent of any specific
+# trigger theory, and should be tuned heavily; expect false positives
+# from legitimate outbound calls made by the application itself.
+alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"PHPUP2026 outbound connection from HTTP server shortly after a PHP worker fatal-error response (tune/correlate, unvalidated anchor)"; flow:to_server,established; classtype:trojan-activity; sid:9109636; rev:1;)
 
-# --- forged zval structural match (highest confidence) ---
-
-# IS_STRING_EX (0x106, content below) and IS_OBJECT_EX (0x308, content
-# below) are zval type-tag constants fixed by PHP's own struct ABI, not by
-# any tool's code — any working exploit for this bug class has to lay out a
-# forged zend_fcall_info with these exact bytes in these relative positions
-# to get zend_call_function to dereference it. Co-occurrence with a
-# dangerous-function marker in the same body is strong structural evidence
-# of exploitation, independent of tool branding.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 forged zend_fcall_info/zval markers in session.upload_progress body"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; content:"|06 01 00 00|"; fast_pattern; content:"|08 03 00 00|"; within:400; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/"; classtype:web-application-attack; sid:9109630; rev:1;)
-
-# --- post-exploitation (behavioral, low confidence / tuning required) ---
-
-# Mark the targeted server when the structural match fires, so it can be
-# correlated against that same host's later outbound traffic (xbits, not
-# flowbits: the exploit request and any C2 callback are two separate flows
-# on the same host, not the same flow). Uses `xbits`, not the legacy
-# `hostbits` keyword the original revision used — real Suricata 7.0.3
-# rejects `hostbits:set,name,track ip_dst,expire 300` outright (confirmed:
-# "not a valid setting for hostbits"). The legacy `hostbits` keyword only
-# takes `set|unset|isset|isnotset|toggle,<name>[,src|dst]` with no `track`
-# or `expire` clause at all; `xbits` is the modern keyword that actually
-# supports `track <ip_src|ip_dst|ip_pair>` and `expire <seconds>`.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 internal: mark host for post-exploitation correlation"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; content:"|06 01 00 00|"; content:"|08 03 00 00|"; within:400; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/"; xbits:set,phpup2026.exploit_attempt,track ip_dst,expire 300; noalert; sid:9109631; rev:1;)
-
-# Generic RCE-via-PHP-worker indicator: an outbound connection initiated
-# directly by a marked HTTP server shortly after the structural match above.
-# This is intentionally tool-agnostic (no canary string) and still needs
-# tuning; expect false positives from legitimate outbound calls made by the
-# application itself.
-alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"PHPUP2026 outbound connection from HTTP server following upload_progress exploit signal (tune/correlate)"; flow:to_server,established; xbits:isset,phpup2026.exploit_attempt,track ip_src; classtype:trojan-activity; sid:9109632; rev:1;)
+# --- retired (2026-10-21) ---
+#
+# 9109628 oversized multipart body (>40000 bytes) -- built on the dead
+#   "needs many 288-byte reclaim blobs" spray-count theory. Body-size
+#   alone is not a validated signal for the real mechanism.
+# 9109629 dangerous-function string in upload_progress body -- assumed
+#   a same-request forged-callback payload is planted directly in the
+#   HTTP body. No basis for this in the real mechanism; retired.
+# 9109630 forged zend_fcall_info / zval byte markers (IS_STRING_EX /
+#   IS_OBJECT_EX) -- this entire byte layout came from the leaked PoC
+#   artifact's own code, which VulnCheck reports does not have the
+#   correct mechanism. Retired, not just caveated.
+# 9109631/9109632 hostbit-correlation pair anchored on 9109630 -- dead
+#   along with its anchor. A replacement correlation rule needs a
+#   validated primary signal first; see 9109636 above for the
+#   placeholder in the meantime.

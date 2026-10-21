@@ -1,7 +1,22 @@
-// phpup-2026 — Microsoft Sentinel KQL Detection Queries
-// CVE-2026-109619 · PHP session.upload_progress UAF · RCE
-// (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
-// official 2026-10-21 advisory; see README.md "Official status")
+// phpup-2026 - Microsoft Sentinel KQL Detection Queries
+// CVE-2026-109618 / CVE-2026-109619 · PHP longjmp/bailout state corruption · RCE
+//
+// 2026-10-21 rewrite. The prior revision keyed on a single-request
+// multipart-stall heap-spray mechanism (oversized body, forged
+// zend_fcall_info byte markers, 100+ identically-named array fields)
+// derived from the leaked PoC artifact's own claims. That mechanism does
+// not match the real fix (php/php-src commit 82f8f31b16a, "Avoid state
+// corruption via bailout") and those queries are retired below, not
+// caveated. See ANALYSIS.md for the full mechanism writeup.
+//
+// The real mechanism is cross-request: a longjmp-interrupted (producer)
+// request leaves worker-persistent globals dangling; a later, different
+// (consumer) request on the SAME WORKER reads them before its own init
+// has run. "Same worker" is not visible from any of these log sources -
+// none of them carry a worker/process identifier tied to the request.
+// What IS real and network-visible is the producer-side OOM-amplification
+// technique (main/rfc1867.c's now-fixed unbounded per-part header count),
+// so that's the center of gravity for the queries below.
 //
 // Table coverage:
 //   W3CIISLog              IIS web server logs
@@ -10,27 +25,13 @@
 //   DeviceNetworkEvents    MDE network events
 //   DeviceProcessEvents    MDE process creation
 //   SecurityEvent          Windows Security (EventID 4688)
-//
-// Detection is keyed on the vulnerability mechanics — the required
-// PHP_SESSION_UPLOAD_PROGRESS + PHPSESSID precondition, spray-sized bodies,
-// dangerous-function markers, and the forged zend_fcall_info/zval byte
-// layout PHP's own struct ABI dictates — not on one released tool's
-// hardcoded multipart boundary, User-Agent, session ID, or output canary.
-// Those are trivial to change and will not survive a rewritten exploit.
-// The one released PoC's literal strings are kept as blocklist-grade IOCs
-// in iocs.json's this_artifact_only section, not as detection logic here.
-//
-// Tier 1 rules are generic/structural — mechanics-based, works against any
-//   exploit for this bug class, not just the released PoC.
-// Tier 2 rules are behavioral — tune lookback/threshold before alerting.
-// Hunting queries need WAF/proxy body inspection enabled; low volume.
 
 
-// ── TIER 1: GENERIC / MECHANICS-BASED ────────────────────────────────────────
+// ── TIER 1: FEATURE PRESENCE (precondition, not an attack signal alone) ──────
 
-// [T1-1] session.upload_progress feature reachable and in use — IIS
-// Baseline precondition for CVE-2026-109619. Also how the legitimate progress-bar
-// feature is used — inventory/policy signal, not an attack signal alone.
+// [T1-1] session.upload_progress feature reachable and in use - IIS
+// Baseline precondition for the CVE-2026-109619 consumer path specifically.
+// Also how the legitimate progress-bar feature is used.
 W3CIISLog
 | where TimeGenerated > ago(1h)
 | where csMethod == "POST"
@@ -39,7 +40,7 @@ W3CIISLog
 | project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
 
 
-// [T1-2] session.upload_progress feature in use — CommonSecurityLog (WAF/proxy)
+// [T1-2] session.upload_progress feature in use - CommonSecurityLog (WAF/proxy)
 CommonSecurityLog
 | where TimeGenerated > ago(1h)
 | where RequestMethod == "POST"
@@ -47,56 +48,59 @@ CommonSecurityLog
 | project TimeGenerated, SourceIP, DestinationHostName, RequestURL, Message
 
 
-// [T1-3] Oversized session.upload_progress multipart body — spray heuristic
-// Exploitation needs many >=288-byte reclaim blobs to win the freed-arData
-// race, far larger than a normal progress-tracked upload's form fields.
-// Threshold is a generic spray-size heuristic, not the released PoC's
-// specific field count — tune to this environment's normal upload sizes.
+// ── TIER 2: OOM-AMPLIFICATION PRODUCER SIGNALS (medium-high confidence) ──────
+// Grounded directly in the real fix diff. Do NOT require
+// PHP_SESSION_UPLOAD_PROGRESS - CVE-2026-109618's OOM trigger works on any
+// multipart upload endpoint, not just session.upload_progress users.
+
+// [T2-1] Duplicate Content-Disposition/Content-Type header in one multipart
+// part - Azure WAF. The fix (main/rfc1867.c) restricts header saving to
+// these two names and skips duplicates; a legitimate part has exactly one
+// Content-Disposition (optionally one Content-Type). Requires WAF request
+// body inspection enabled.
+AzureDiagnostics
+| where TimeGenerated > ago(1h)
+| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
+| where requestBody_s has "multipart/form-data"
+| extend CDCount = countof(requestBody_s, "Content-Disposition")
+| where CDCount >= 2
+| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, CDCount
+
+
+// [T2-2] High header density in multipart body - IIS (size proxy)
+// Coarser signal where body content isn't available: a multipart POST
+// whose size is high relative to a typical legitimate file upload's
+// form-field overhead can indicate many small header-heavy parts rather
+// than one large file. Weak alone - pair with T2-1 or T2-3 where possible.
 W3CIISLog
 | where TimeGenerated > ago(1h)
 | where csMethod == "POST"
 | where csHeaders has "multipart/form-data"
-| where csCookie has "PHPSESSID="
 | where csBytes >= 40000
 | project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
 
 
-// [T1-4] Dangerous function name inside the upload_progress body — Azure WAF
-// Generalized past system() to the common command/code execution sinks an
-// attacker would pivot a forged zend_fcall_info to. Requires WAF request
-// body inspection enabled.
+// [T2-3] Many empty-file fields or deeply nested field names - Azure WAF
+// Advisory text: empty file fields don't count toward max_file_uploads but
+// still create file-metadata arrays; nested field names multiply that
+// cost. Approximated by counting filename="" occurrences and bracket-
+// nesting depth in field names.
 AzureDiagnostics
-| where TimeGenerated > ago(24h)
+| where TimeGenerated > ago(1h)
 | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "PHP_SESSION_UPLOAD_PROGRESS"
-| where requestBody_s matches regex @"\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00"
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d
+| where requestBody_s has "multipart/form-data"
+| extend EmptyFileCount = countof(requestBody_s, 'filename=""') + countof(requestBody_s, "filename=''")
+| extend NestedFieldNames = extract_all(@'name="([^"]*\[[^"]*\]\[[^"]*\])"', requestBody_s)
+| extend NestedFieldCount = array_length(NestedFieldNames)
+| where EmptyFileCount >= 10 or NestedFieldCount >= 10
+| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, EmptyFileCount, NestedFieldCount
 
 
-// [T1-5] Forged zend_fcall_info/zval structural match — Azure WAF (highest confidence)
-// IS_STRING_EX (0x106) and IS_OBJECT_EX (0x308) are zval type-tag constants
-// fixed by PHP's own ABI, not by any tool's code; co-occurrence with a
-// dangerous-function marker in the same body is strong structural evidence
-// of exploitation, independent of tool branding. Requires raw/binary-safe
-// body capture — most WAF logs won't preserve the control bytes verbatim,
-// so this query is best-effort and should be validated against the
-// deployment's actual log encoding before relying on it.
-AzureDiagnostics
-| where TimeGenerated > ago(24h)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "PHP_SESSION_UPLOAD_PROGRESS"
-| where requestBody_s matches regex @"\x06\x01\x00\x00"   // IS_STRING_EX
-    and requestBody_s matches regex @"\x08\x03\x00\x00"   // IS_OBJECT_EX
-    and requestBody_s matches regex @"\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00"
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d
+// ── TIER 3: BEHAVIORAL / POST-EXPLOITATION ───────────────────────────────────
 
-
-// ── TIER 2: BEHAVIORAL SIGNALS ────────────────────────────────────────────────
-
-// [T2-1] Shell spawned under PHP/web server process — MDE
-// Indicates successful RCE via a dangerous-function call from the forged
-// zend_fcall_info chain. Parent: php-fpm, php, lsphp, httpd, nginx.
-// Child: shell or recon tools.
+// [T3-1] Shell spawned under PHP/web server process - MDE
+// Post-exploitation indicator, generically valid regardless of which
+// mechanism caused the RCE. Parent: php-fpm, php, lsphp, httpd, nginx.
 DeviceProcessEvents
 | where TimeGenerated > ago(1h)
 | where InitiatingProcessFileName has_any ("php-fpm", "php", "lsphp", "httpd", "apache2", "nginx")
@@ -107,9 +111,9 @@ DeviceProcessEvents
           FileName, ProcessCommandLine
 
 
-// [T2-2] Shell spawned under web service account — SecurityEvent 4688
-// For environments not running MDE. Requires process creation auditing enabled
-// (Security Policy: Audit Process Creation + command-line in audit).
+// [T3-2] Shell spawned under web service account - SecurityEvent 4688
+// For environments not running MDE. Requires process creation auditing
+// enabled (Security Policy: Audit Process Creation + command-line in audit).
 SecurityEvent
 | where TimeGenerated > ago(1h)
 | where EventID == 4688
@@ -120,66 +124,35 @@ SecurityEvent
           ParentProcessName, NewProcessName, CommandLine
 
 
-// [T2-3] Spike in oversized multipart POSTs from a single IP — IIS
-// Burst-over-time complement to T1-3's per-request size threshold.
-W3CIISLog
+// [T3-3] Spike in header-duplication hits from a single IP - IIS/Azure WAF
+// Burst-over-time complement to T2-1: repeated amplification attempts
+// from one source in a short window, regardless of whether any one
+// request alone crosses the threshold.
+AzureDiagnostics
 | where TimeGenerated > ago(15m)
-| where csMethod == "POST"
-| where csBytes >= 40000
+| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
+| where requestBody_s has "multipart/form-data"
+| extend CDCount = countof(requestBody_s, "Content-Disposition")
+| where CDCount >= 2
 | summarize
-    PostCount = count(),
-    Targets   = make_set(csUriStem, 5)
-    by bin(TimeGenerated, 5m), cIP, csHost
-| where PostCount >= 3
-| project TimeGenerated, cIP, csHost, PostCount, Targets
+    Hits    = count(),
+    Targets = make_set(requestUri_s, 5)
+    by bin(TimeGenerated, 5m), clientIP_s, host_s
+| where Hits >= 3
+| project TimeGenerated, clientIP_s, host_s, Hits, Targets
 
 
-// [T2-4] Combined pattern — oversized body + worker crash/success mix — IIS
-// A crashed PHP worker returns 502/503 (wrong per-build offset guess); a
-// successful RCE may return 200 with command output. Multiple large
-// multipart POSTs with a crash/success mix from one source is the
-// fingerprint of the offset-derivation-then-exploit sequence, regardless
-// of which tool produced it.
-//
-// 2026-10-21: this crash premise is unvalidated against real behavior.
-// A real PHP 8.3.6 lab given the exact documented precondition (a
-// multi-second stall between multipart file parts) returned a clean 200
-// OK, not a 502/503 — see ANALYSIS.md's mechanism finding and
-// examples/logs/phpup2026-nginx-stall-no-crash.log. Treat this query
-// (and phpup2026-WorkerCrashPattern.yaml, which shares the premise) as
-// unvalidated until revised or caveated.
-W3CIISLog
-| where TimeGenerated > ago(1h)
-| where csMethod == "POST"
-| where csCookie has "PHPSESSID="
-| where csBytes >= 10000
-| where scStatus in ("200", "502", "503")
-| summarize
-    TotalRequests = count(),
-    Status502or503 = countif(scStatus in ("502","503")),
-    Status200      = countif(scStatus == "200"),
-    MaxBytes       = max(csBytes),
-    URIs           = make_set(csUriStem, 5)
-    by bin(TimeGenerated, 10m), cIP, csHost
-| where TotalRequests >= 2 and Status502or503 >= 1
-| extend WorkerCrashRatio = todouble(Status502or503) / todouble(TotalRequests)
-| project TimeGenerated, cIP, csHost, TotalRequests, Status200,
-          Status502or503, WorkerCrashRatio, MaxBytes, URIs
-| sort by WorkerCrashRatio desc
-
-
-// [T2-5] Post-exploitation correlation — outbound connection from a host that
-// showed the Tier 1 structural match within the prior hour. Tool-agnostic
-// (no distribution-domain IOC): any destination, correlated purely on host
-// + time window against T1-5's structural hit.
+// [T3-4] Post-exploitation correlation - outbound connection from a host
+// that showed a T2-1 amplification hit within the prior hour. Still
+// speculative: this does not confirm "same worker," only "same host,
+// recently." Tool-agnostic (no distribution-domain IOC).
 let suspectHosts =
     AzureDiagnostics
     | where TimeGenerated > ago(1h)
     | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-    | where requestBody_s has "PHP_SESSION_UPLOAD_PROGRESS"
-    | where requestBody_s matches regex @"\x06\x01\x00\x00"
-        and requestBody_s matches regex @"\x08\x03\x00\x00"
-        and requestBody_s matches regex @"\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00"
+    | where requestBody_s has "multipart/form-data"
+    | extend CDCount = countof(requestBody_s, "Content-Disposition")
+    | where CDCount >= 2
     | project MatchTime = TimeGenerated, host_s;
 DeviceNetworkEvents
 | where TimeGenerated > ago(1h)
@@ -191,7 +164,7 @@ DeviceNetworkEvents
 
 // ── HUNTING ───────────────────────────────────────────────────────────────────
 
-// [H1] PHP_SESSION_UPLOAD_PROGRESS in request body — Azure WAF
+// [H1] PHP_SESSION_UPLOAD_PROGRESS in request body - Azure WAF
 // Requires WAF request body inspection enabled. Low volume on benign sites.
 AzureDiagnostics
 | where TimeGenerated > ago(24h)
@@ -201,18 +174,36 @@ AzureDiagnostics
           httpStatus_d, requestBody_s
 
 
-// [H2] Repeated identically-named array field — spray heuristic
-// A large count of identically-named array fields (t[] in the released PoC;
-// field name is arbitrary and attacker-controlled) is how the heap spray is
-// delivered. Legitimate apps rarely send 100+ of the same array field in a
-// single request; this generalizes past any one tool's chosen field name by
-// counting repeated `name="X[]"` patterns rather than matching "t[]" itself.
+// [H2] Distribution of Content-Disposition occurrences per multipart
+// request - Azure WAF. Baseline this against normal legitimate multi-file
+// upload traffic before setting an alerting threshold on T2-1/T3-3; a form
+// with many real file fields also has many Content-Disposition headers,
+// just not duplicated ones within a single part.
 AzureDiagnostics
 | where TimeGenerated > ago(24h)
 | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| extend ArrayFieldNames = extract_all(@'name="([A-Za-z0-9_]+)\[\]"', requestBody_s)
-| mv-expand ArrayFieldNames to typeof(string)
-| summarize FieldCount = count() by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, tostring(ArrayFieldNames)
-| where FieldCount >= 100
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d,
-          FieldName = ArrayFieldNames, FieldCount
+| where requestBody_s has "multipart/form-data"
+| extend CDCount = countof(requestBody_s, "Content-Disposition")
+| summarize RequestCount = count() by CDCount
+| sort by CDCount asc
+
+
+// ── RETIRED (2026-10-21) ──────────────────────────────────────────────────────
+// Old T1-3/T1-4/T1-5 (oversized body as spray proxy, dangerous-function
+//   string in body, forged zend_fcall_info/zval byte markers): built on
+//   the dead single-request spray mechanism. The byte-marker query in
+//   particular came entirely from the leaked PoC artifact's own code,
+//   which VulnCheck reports does not have the correct mechanism.
+// Old T2-4 (oversized-body + 200/502/503 crash-ratio): the crash premise
+//   was already flagged unvalidated in the prior revision (a real lab
+//   test produced a clean 200 OK under the documented precondition) and
+//   the premise itself (same-request stall causing a same-request crash)
+//   is now known to be the wrong mechanism entirely. Not replaced with a
+//   new crash-ratio theory - what the real producer request's HTTP-visible
+//   symptom actually looks like (500 page, truncated response, or silent
+//   continuation with only a log-side OOM entry) is itself unconfirmed;
+//   see ANALYSIS.md's "What we have NOT reproduced."
+// Old H2 (100+ identically-named array fields): built on the dead
+//   spray-count theory. Replaced by T2-3's empty-file-field/nested-field
+//   counting, which maps to a real, fix-confirmed amplification vector
+//   instead.

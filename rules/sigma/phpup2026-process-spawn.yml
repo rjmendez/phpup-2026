@@ -3,13 +3,21 @@ id: 4b9d2e51-7c3a-4e8f-b1d5-3e5a2c7f9d1b
 status: experimental
 description: |
   Shell or interpreter spawned under the PHP worker process user (www-data,
-  nobody, lsphp). Indicates successful RCE via system() from the forged
-  zend_fcall_info chain.
+  nobody, lsphp). Generically valid as a PHP child-process-monitoring
+  indicator regardless of root cause. 2026-10-21: previously described as
+  "RCE via system() from the forged zend_fcall_info chain" -- that specific
+  payload chain was the artifact's own claim and has not been confirmed
+  against the real fix (php/php-src commit 82f8f31b16a); see ANALYSIS.md.
+  The rule's value as a post-exploitation indicator doesn't depend on
+  which mechanism caused the RCE.
 references:
-  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+  - https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
+  - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
+  - https://github.com/rjmendez/phpup-2026
 tags:
   - attack.execution
   - attack.t1059.004
+  - cve.2026.109618
   - cve.2026.109619
 logsource:
   category: process_creation
@@ -36,5 +44,5 @@ detection:
       - 'bash -i'
   condition: (selection_user or selection_parent) and selection_cmd
 falsepositives:
-  - cron jobs running as www-data — suppress known-good parent commands
+  - cron jobs running as www-data - suppress known-good parent commands
 level: high

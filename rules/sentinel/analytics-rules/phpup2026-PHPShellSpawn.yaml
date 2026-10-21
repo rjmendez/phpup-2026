@@ -1,15 +1,18 @@
 id: 56cda6d3-8402-4d6c-a2e7-f72b1efed280
-name: PHP Session Upload Progress UAF - Shell Spawned by PHP Process (CVE-2026-109619)
+name: PHP Worker Process Spawning Shell/Recon Tool (CVE-2026-109618/109619)
 description: |
-  'Detects a shell or recon tool spawned directly under a PHP worker process
-  (php-fpm, lsphp, php) — the post-exploitation indicator for successful RCE via
-  CVE-2026-109619 (PHP session.upload_progress heap UAF, CVSS 9.2). Not
-  CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
-  official 2026-10-21 advisory. Exploitation steers zend_call_function to
-  system(), which spawns a
-  child process under the PHP worker account (www-data, nobody, or equivalent).
+  'Detects a shell or recon tool spawned directly under a PHP worker
+  process (php-fpm, lsphp, php) - generically useful as a PHP
+  child-process-monitoring indicator regardless of root cause. 2026-10-21:
+  previously described as "RCE via system() from the forged zend_fcall_info
+  chain" for CVE-2026-109619 specifically - that payload chain was the
+  leaked PoC artifact''s own claim and does not match the real fix
+  (php/php-src commit 82f8f31b16a, "Avoid state corruption via bailout");
+  see ANALYSIS.md. The rule''s value as a post-exploitation indicator
+  doesn''t depend on which mechanism caused the RCE.
   References:
-  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+  - https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
+  - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
   - https://github.com/rjmendez/phpup-2026'
 severity: High
 status: Available
@@ -29,6 +32,7 @@ relevantTechniques:
   - T1059
   - T1059.004
 tags:
+  - CVE-2026-109618
   - CVE-2026-109619
   - phpup-2026
 query: |
@@ -71,7 +75,7 @@ entityMappings:
         columnName: HashAlgorithm
       - identifier: Value
         columnName: SHA256
-version: 1.0.2
+version: 1.0.3
 kind: Scheduled
 metadata:
     source:

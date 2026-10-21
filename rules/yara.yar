@@ -1,37 +1,29 @@
-// phpup-2026 — YARA rules
-// CVE-2026-109619 · PHP session.upload_progress UAF · RCE
-// (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
-// official 2026-10-21 advisory; see README.md "Official status")
+// phpup-2026 - YARA rules
+// CVE-2026-109618 / CVE-2026-109619 · PHP longjmp/bailout state corruption · RCE
 //
-// `phpup2026_spray` verified with real `yara` (4.5.0) against real request
-// bodies: fires on examples/http/phpup2026-real-dangerous-fn-zval-markers.http
-// and examples/pcaps/phpup2026-real-blob-CVE-109618-dtor0.pcap; correctly
-// does NOT fire on the benign or oversized-only samples (no false
-// positive from body size or PHP_SESSION_UPLOAD_PROGRESS presence alone).
-// `phpup2026_source`/`phpup2026_distribution` weren't exercised — this lab
-// never carried the actual PoC tool's literal strings (B7kQpoc*, J4ck3LSyN,
-// the distribution URL), by design (those are this_artifact_only IOCs).
+// 2026-10-21 rewrite. `phpup2026_spray` is removed, not caveated: it
+// matched a forged zend_fcall_info byte layout (IS_STRING_EX@+16,
+// IS_OBJECT_EX@+160, system\0@+200) that came entirely from the leaked
+// PoC artifact's own code, not from the real fix (php/php-src commit
+// 82f8f31b16a). VulnCheck independently reports that none of the public
+// PoCs they reviewed have the correct mechanism for this CVE pair, and
+// this repo's own lab never produced a working crash/RCE under that
+// layout's documented trigger -- see ANALYSIS.md. A rule matching that
+// byte layout detects this one artifact's own (likely non-functional)
+// claim, not the vulnerability class.
+//
+// `phpup2026_source`/`phpup2026_distribution` are unaffected -- they
+// fingerprint the artifact/tool itself (disk/memory forensics: "is this
+// specific leaked PoC present"), a different use case from network
+// detection of the real vulnerability, and don't depend on whether the
+// artifact's own exploitation claims are accurate.
 
-// Forged zend_fcall_info blob in HTTP body or memory.
-// spray: 149x 288-byte blobs; IS_STRING_EX@+16, IS_OBJECT_EX@+160, system\0@+200.
-rule phpup2026_spray : exploit {
-    meta:
-        cve  = "CVE-2026-109619"
-        date = "2026-10-21"
-    strings:
-        $ise = { 06 01 00 00 }          // IS_STRING_EX at blob+16
-        $ioe = { 08 03 00 00 }          // IS_OBJECT_EX at blob+160
-        $sys = "system\x00"             // command string at blob+200
-        $ctx = "PHP_SESSION_UPLOAD_PROGRESS"
-    condition:
-        $sys and $ctx and $ise and $ioe
-}
-
-// Framework or PoC source file — matches poc0, poc1, php_up_framework, derivatives.
+// Framework or PoC source file - matches poc0, poc1, php_up_framework, derivatives.
 rule phpup2026_source : tool {
     meta:
-        cve  = "CVE-2026-109619"
+        cves = "CVE-2026-109618,CVE-2026-109619"
         date = "2026-10-21"
+        note = "fingerprints the leaked PoC artifact on disk/in memory; does not confirm the artifact's own claimed mechanism is correct"
     strings:
         $b1 = "B7kQpoc618"
         $b2 = "B7kQpoc619"
@@ -47,10 +39,10 @@ rule phpup2026_source : tool {
         4 of them
 }
 
-// Artifact distribution reference — URL, hash, or author credit in any file.
+// Artifact distribution reference - URL, hash, or author credit in any file.
 rule phpup2026_distribution : artifact {
     meta:
-        cve    = "CVE-2026-109619"
+        cves   = "CVE-2026-109618,CVE-2026-109619"
         date   = "2026-10-21"
         sha256 = "0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63"
     strings:
