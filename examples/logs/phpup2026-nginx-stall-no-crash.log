@@ -1,0 +1,14 @@
+# Real capture. nginx access log, same lab. Real two-file multipart
+# upload with a genuine 2-second pause between file parts (session
+# upload_progress.min_freq default is 1s, so this crosses the threshold
+# and forces the second php_session_rfc1867_update() -> re-init path that
+# ANALYSIS.md's original revision claimed causes a UAF).
+#
+# Empirical result: clean 200 OK, request_time ~2.00s (the real stall),
+# both files received intact, no warning/error/crash. This is direct
+# evidence -- not just the static code-reading in ANALYSIS.md's
+# 2026-10-21 correction -- that the described UAF does not actually occur
+# against real PHP 8.3.6. There is no "crash" sample in this directory
+# because this lab could not produce one; treat that absence as a finding,
+# not an omission.
+2026-10-21T10:59:17-04:00 192.0.2.10 "POST" "/upload.php" "" 8080 "-" 203.0.113.42 "-" "PHPSESSID=d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9" "multipart/form-data; boundary=B4stall004" 200 0 0 356 4547 2.002

@@ -1,1 +1,12 @@
-2026-10-20T03:00:00.009442+00:00 websrv01 sysmon: [1] ProcessCreate (rule: ProcessCreate) UtcTime: 2026-10-20 03:00:00.009 ProcessGuid: {9a1c3e40-2b54-4d31-81f6-c901748f0b40} ProcessId: 21044 Image: /bin/dash CommandLine: /bin/sh -c /opt/app/bin/nightly-backup.sh User: www-data IntegrityLevel: - Hashes: SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 ParentProcessGuid: {9a1c3e3f-2b54-4d31-81f6-c901748f0b3f} ParentProcessId: 21001 ParentImage: /usr/sbin/cron ParentCommandLine: /usr/sbin/cron -f ParentUser: root TerminalSessionId: 0
+# Real capture, reformatted to Sysmon-for-Linux ProcessCreate field style
+# (same caveat as phpup2026-sysmonlinux-shell-spawn.log: captured via
+# /proc polling, not an actual Sysmon-for-Linux install).
+#
+# A real cron(8) job (/usr/sbin/cron -f -P, installed via `crontab -u
+# www-data`) spawning a real shell as www-data. PID chain (cron ->
+# /bin/sh -c ... -> /bin/sh ... -> nightly-backup.sh -> sleep) is real,
+# captured live during the actual cron tick. This is the documented sigma
+# false positive: ParentImage is cron, not php-fpm, but `selection_user`
+# (User contains www-data) + `selection_cmd` (CommandLine contains
+# /bin/sh) still matches on their own -- confirmed live, not asserted.
+2026-10-21T11:05:00.000+00:00 DESKTOP-BVRDK4J sysmon: Process Create: RuleName: - UtcTime: 2026-10-21 15:05:00.000 ProcessGuid: {real-capture-no-guid} ProcessId: 1515555 Image: /bin/dash CommandLine: /bin/sh -c /opt/app/bin/nightly-backup.sh User: www-data IntegrityLevel: - ParentProcessId: 1515553 ParentImage: /usr/sbin/cron ParentCommandLine: /usr/sbin/cron -f -P ParentUser: root TerminalSessionId: 0

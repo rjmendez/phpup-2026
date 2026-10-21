@@ -17,6 +17,21 @@
 Fixed in PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (all released 2026-10-21) —
 [official advisory](https://www.php.net/archive/2026.php#2026-10-21-5).
 
+> **2026-10-21 mechanism finding.** Read against real `php/php-src`
+> (`ext/session/session.c`), the UAF described below does not hold up.
+> `progress->data` is `Z_TRY_ADDREF`'d *before* being inserted into
+> `$_SESSION`, so it is never owned only by the session array —
+> `php_session_track_init()` tearing down the old `$_SESSION` on the next
+> `update()` drops the refcount to 1, not 0, and the backing `arData` is
+> never actually freed. Confirmed empirically, not just by reading the
+> code: a real PHP 8.3.6 + nginx lab, given the exact precondition below
+> (two files, a genuine 2-second stall between them, forcing the second
+> `php_session_rfc1867_update()` call), returned a clean `200 OK` with no
+> crash, warning, or corruption — see
+> `examples/logs/phpup2026-nginx-stall-no-crash.log`. Treat the mechanism
+> below as the documented *intent* of the (corrected) CVE-2026-109619
+> research, not as a reproduced, currently-working exploit.
+
 ---
 
 ## Bug

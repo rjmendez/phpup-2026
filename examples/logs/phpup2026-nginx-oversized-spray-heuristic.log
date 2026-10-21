@@ -1,0 +1,8 @@
+# Real capture. nginx access log, same lab as the benign sample. Real
+# request: PHP_SESSION_UPLOAD_PROGRESS + PHPSESSID + 150x 320-byte "t[]"
+# filler fields (58199-byte body, inert content — not a working exploit).
+# Confirmed in this lab to trigger Suricata SID 9109627 and 9109628 for
+# real (see ../logs/phpup2026-eve-positive.json) and to return a normal
+# 200 OK, not a crash — see phpup2026-nginx-stall-no-crash.log and
+# ANALYSIS.md's 2026-10-21 correction for why.
+2026-10-21T10:58:17-04:00 192.0.2.10 "POST" "/upload.php" "" 8080 "-" 203.0.113.42 "-" "PHPSESSID=b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7" "multipart/form-data; boundary=B2oversize002" 200 0 0 361 58403 0.003

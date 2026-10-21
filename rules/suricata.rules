@@ -12,6 +12,17 @@
 # that one released artifact (see iocs.json), not as a detection strategy.
 #
 # SID range 9109627–9109632
+#
+# One rule per physical line below (Suricata requires this — a rule split
+# across multiple lines, as an earlier revision of this file had it, fails
+# to parse; confirmed against Suricata 7.0.3). Verified against real
+# captures in examples/logs/: 9109627/9109628/9109629/9109630 all fire as
+# intended on real traffic. 9109631/9109632 were rewritten from `hostbits`
+# to `xbits` (see note below) and do fire, but only confirmed on a
+# loopback lab where client and server share one IP — the correlation
+# there is a same-IP artifact, not confirmed proof of genuine cross-flow
+# host correlation between two distinct IPs. Re-verify 9109631/9109632 in
+# a topology with a real client/server IP split before relying on them.
 
 # --- feature-presence / policy (low severity, high recall) ---
 
@@ -20,14 +31,7 @@
 # legitimate upload-progress-bar feature is used, so this is inventory/policy
 # visibility (who still has session.upload_progress reachable from the
 # internet), not an attack signal by itself.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 session.upload_progress feature in use (multipart POST + PHPSESSID)";
-  flow:established,to_server;
-  http.method; content:"POST";
-  http.header; content:"multipart/form-data"; nocase;
-  http.cookie; content:"PHPSESSID="; nocase;
-  http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
-  classtype:policy-violation; sid:9109627; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 session.upload_progress feature in use (multipart POST + PHPSESSID)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.cookie; content:"PHPSESSID="; nocase; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; classtype:policy-violation; sid:9109627; rev:1;)
 
 # --- spray geometry (medium severity) ---
 
@@ -35,72 +39,48 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
 # blobs) to win the freed-arData race, far larger than a normal
 # progress-tracked upload's form fields. Threshold is deliberately generic
 # (not tied to the published PoC's 149-field layout) and should be tuned
-# against this deployment's normal upload sizes.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 oversized session.upload_progress multipart body (possible heap-spray)";
-  flow:established,to_server;
-  http.method; content:"POST";
-  http.header; content:"multipart/form-data"; nocase;
-  http.cookie; content:"PHPSESSID="; nocase;
-  http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
-  dsize:>40000;
-  classtype:web-application-attack; sid:9109628; rev:1;)
+# against this deployment's normal upload sizes. Uses `bsize` on the
+# reassembled http.request_body buffer, not `dsize` — `dsize` is a raw
+# per-packet length match and Suricata rejects combining it with http.*
+# sticky buffers (confirmed: "combines packet specific matches ... with
+# stream / state matching").
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 oversized session.upload_progress multipart body (possible heap-spray)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.cookie; content:"PHPSESSID="; nocase; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; bsize:>40000; classtype:web-application-attack; sid:9109628; rev:1;)
 
 # --- payload content (high confidence) ---
 
 # A dangerous-function string is being delivered inside the upload_progress
 # context at all — generalized past `system` to the common command/code
 # execution sinks an attacker would pivot a forged zend_fcall_info to.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 dangerous function name in session.upload_progress body";
-  flow:established,to_server;
-  http.request_body;
-  content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
-  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/R";
-  classtype:web-application-attack; sid:9109629; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 dangerous function name in session.upload_progress body"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/R"; classtype:web-application-attack; sid:9109629; rev:1;)
 
 # --- forged zval structural match (highest confidence) ---
 
-# IS_STRING_EX (0x106) and IS_OBJECT_EX (0x308) are zval type-tag constants
-# fixed by PHP's own struct ABI, not by any tool's code — any working exploit
-# for this bug class has to lay out a forged zend_fcall_info with these exact
-# bytes in these relative positions to get zend_call_function to dereference
-# it. Co-occurrence with a dangerous-function marker in the same body is
-# strong structural evidence of exploitation, independent of tool branding.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 forged zend_fcall_info/zval markers in session.upload_progress body";
-  flow:established,to_server;
-  http.request_body;
-  content:"PHP_SESSION_UPLOAD_PROGRESS";
-  content:"|06 01 00 00|"; fast_pattern;    # IS_STRING_EX
-  content:"|08 03 00 00|"; within:400;      # IS_OBJECT_EX
-  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/";
-  classtype:web-application-attack; sid:9109630; rev:1;)
+# IS_STRING_EX (0x106, content below) and IS_OBJECT_EX (0x308, content
+# below) are zval type-tag constants fixed by PHP's own struct ABI, not by
+# any tool's code — any working exploit for this bug class has to lay out a
+# forged zend_fcall_info with these exact bytes in these relative positions
+# to get zend_call_function to dereference it. Co-occurrence with a
+# dangerous-function marker in the same body is strong structural evidence
+# of exploitation, independent of tool branding.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 forged zend_fcall_info/zval markers in session.upload_progress body"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; content:"|06 01 00 00|"; fast_pattern; content:"|08 03 00 00|"; within:400; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/"; classtype:web-application-attack; sid:9109630; rev:1;)
 
 # --- post-exploitation (behavioral, low confidence / tuning required) ---
 
-# set a hostbit on the targeted server when the structural match fires, so
-# it can be correlated against that same host's later outbound traffic
-# (hostbits, not flowbits: the exploit request and any C2 callback are two
-# separate flows on the same host, not the same flow)
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 internal: mark host for post-exploitation correlation";
-  flow:established,to_server;
-  http.request_body;
-  content:"PHP_SESSION_UPLOAD_PROGRESS";
-  content:"|06 01 00 00|"; content:"|08 03 00 00|"; within:400;
-  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/";
-  hostbits:set,phpup2026.exploit_attempt,track ip_dst,expire 300;
-  noalert;
-  sid:9109631; rev:1;)
+# Mark the targeted server when the structural match fires, so it can be
+# correlated against that same host's later outbound traffic (xbits, not
+# flowbits: the exploit request and any C2 callback are two separate flows
+# on the same host, not the same flow). Uses `xbits`, not the legacy
+# `hostbits` keyword the original revision used — real Suricata 7.0.3
+# rejects `hostbits:set,name,track ip_dst,expire 300` outright (confirmed:
+# "not a valid setting for hostbits"). The legacy `hostbits` keyword only
+# takes `set|unset|isset|isnotset|toggle,<name>[,src|dst]` with no `track`
+# or `expire` clause at all; `xbits` is the modern keyword that actually
+# supports `track <ip_src|ip_dst|ip_pair>` and `expire <seconds>`.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 internal: mark host for post-exploitation correlation"; flow:established,to_server; http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; content:"|06 01 00 00|"; content:"|08 03 00 00|"; within:400; pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/"; xbits:set,phpup2026.exploit_attempt,track ip_dst,expire 300; noalert; sid:9109631; rev:1;)
 
 # Generic RCE-via-PHP-worker indicator: an outbound connection initiated
 # directly by a marked HTTP server shortly after the structural match above.
 # This is intentionally tool-agnostic (no canary string) and still needs
 # tuning; expect false positives from legitimate outbound calls made by the
 # application itself.
-alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (
-  msg:"PHPUP2026 outbound connection from HTTP server following upload_progress exploit signal (tune/correlate)";
-  flow:to_server,established;
-  hostbits:isset,phpup2026.exploit_attempt,track ip_src;
-  classtype:trojan-activity; sid:9109632; rev:1;)
+alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"PHPUP2026 outbound connection from HTTP server following upload_progress exploit signal (tune/correlate)"; flow:to_server,established; xbits:isset,phpup2026.exploit_attempt,track ip_src; classtype:trojan-activity; sid:9109632; rev:1;)

@@ -1,0 +1,7 @@
+# Real capture. nginx access log (phpup_w3c log_format), from a local lab:
+# nginx 1.24.0 + php-fpm 8.3.6 + session.upload_progress default config,
+# against a real small (3.8KB JPEG) legitimate upload_progress request.
+# IPs redacted to RFC 5737 TEST-NET per examples/ convention (real capture
+# was loopback 127.0.0.1 on both sides; server port was lab port 8080, not
+# 443 — this lab has no TLS terminator).
+2026-10-21T10:59:12-04:00 192.0.2.10 "POST" "/upload.php" "" 8080 "-" 203.0.113.42 "phpup-lab-test/1.0" "PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" "multipart/form-data; boundary=B1benign001" 200 0 0 331 4220 0.002
