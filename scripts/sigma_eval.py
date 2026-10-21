@@ -135,17 +135,16 @@ if __name__ == "__main__":
     # this rule's selection list -- a real negative control, not
     # constructed: this rule should not fire on the feature-presence SID.
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109627}, "sid 9109627 (real alert, wrong rule's SID -- negative control)", expect=False)
-    # sid 9109635: logic-only check. This SID has never fired in any of
-    # this repo's four example pcaps (none of them contain an empty-file-
-    # field request) -- this confirms the YAML's selection list syntax
-    # matches a hypothetical event, not that the underlying Suricata rule
-    # has ever been exercised by real traffic. See rules/suricata.rules.
-    all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109635}, "sid 9109635 (logic-only, never exercised by real traffic)", expect=True)
-    # sid 9109634/9109636: retired, must NOT be in this rule's selection
-    # list at all (not just "doesn't match this event" -- shouldn't be
-    # listed as a possibility). Confirmed by reading the YAML directly
-    # above; also spot-checked here that neither ever matches.
+    # sid 9109634/9109635/9109636: retired, must NOT be in this rule's
+    # selection list at all (not just "doesn't match this event" --
+    # shouldn't be listed as a possibility). 9109635 was proven to
+    # false-positive on a real legitimate 4-file upload (examples/pcaps/
+    # phpup2026-real-legit-multifile-benign.pcap, examples/logs/
+    # phpup2026-eve-legit-multifile-fp.json) -- not merely unexercised,
+    # actually wrong. Confirmed by reading the YAML directly above; also
+    # spot-checked here that none of the three ever match.
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109634}, "sid 9109634 (retired SID, must not match)", expect=False)
+    all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109635}, "sid 9109635 (retired SID, proven false-positive, must not match)", expect=False)
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109636}, "sid 9109636 (retired SID, must not match)", expect=False)
 
     print()

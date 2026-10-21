@@ -5,22 +5,28 @@ description: |
   2026-10-21 rewrite: the prior revision of this rule mapped to Suricata
   SIDs (9109628-9109630, 9109632) built on the now-retired single-request
   spray/byte-offset mechanism -- see ANALYSIS.md and rules/suricata.rules'
-  own "retired" section. This maps instead to the SIDs that survived that
+  own "retired" section. This maps instead to the SID that survived that
   rewrite: the duplicate-header-name signal (9109633), grounded directly
-  in the real fix commit's rfc1867.c changes, and the empty-file-field
-  signal (9109635). These are IDS-category (not webserver-category)
-  because they need actual HTTP body inspection (Suricata's
-  http.request_body), which standard web server access logs do not
-  capture -- see phpup2026-feature-presence.yml for the equivalent
-  webserver-only precondition signal. Alert signature_ids are defined by
-  this repo's suricata.rules and must match the deployed ruleset.
+  in the real fix commit's rfc1867.c changes. IDS-category (not
+  webserver-category) because it needs actual HTTP body inspection
+  (Suricata's http.request_body), which standard web server access logs
+  do not capture -- see phpup2026-feature-presence.yml for the
+  equivalent webserver-only precondition signal. Alert signature_ids are
+  defined by this repo's suricata.rules and must match the deployed
+  ruleset.
 
   2026-10-21, same day, second fix: this rule briefly also listed 9109634
   (a density-proxy extension of 9109633) - that SID was retired the same
   day it was added, caught failing its own Python test cases before ever
-  being deployed (see rules/suricata.rules' retired section). Removed
-  from the selection list below; it was never a live SID in any shipped
-  ruleset, so no deployment ever relied on it.
+  being deployed. Removed from the selection list below; it was never a
+  live SID in any shipped ruleset, so no deployment ever relied on it.
+
+  2026-10-21, same day, third fix: this rule also listed 9109635 (empty
+  file fields), which was separately proven to false-positive on a real,
+  entirely legitimate 4-file upload (examples/pcaps/
+  phpup2026-real-legit-multifile-benign.pcap) and retired in
+  rules/suricata.rules with that evidence. Removed from the selection
+  list below for the same reason as 9109634.
 references:
   - https://github.com/rjmendez/phpup-2026
 tags:
@@ -34,13 +40,11 @@ detection:
   selection:
     alert.signature_id:
       - 9109633
-      - 9109635
   condition: selection
 falsepositives:
-  - 9109635 is a density-based approximation (Suricata has no native
-    occurrence-count keyword) and needs tuning against this deployment's
-    real multi-file-upload traffic, and has not yet been verified
-    against any real traffic at all (see rules/suricata.rules); weight
-    9109633 (exact duplicate-header-name match, live-fire verified
-    against this repo's real captures) higher
+  - None known at this signature_id alone (9109633 is live-fire verified
+    against both the real OOM-amplification captures and a real
+    legitimate multi-file upload, see rules/suricata.rules) -- but any
+    future SID added to the selection list above should be held to the
+    same bar before shipping, per 9109634/9109635's retirement history.
 level: high

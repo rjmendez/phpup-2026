@@ -65,7 +65,7 @@ confirmed trigger/consumer path, not by separate code. `ANALYSIS.md`,
 | Path | Format |
 |------|--------|
 | `iocs.json` | machine-readable IOCs - real mechanism details (fix-commit-grounded) and `this_artifact_only` (one PoC's literal strings) kept separate |
-| `rules/suricata.rules` | Suricata 7+ - OOM-amplification + feature-presence signals (SID 9109627, 9109633, 9109635 active; 9109628-9109632, 9109634, 9109636 retired - see the file's own retired-rules section) |
+| `rules/suricata.rules` | Suricata 7+ - OOM-amplification + feature-presence signals (SID 9109627, 9109633 active, both live-fire verified including against a real legitimate multi-file upload; 9109628-9109632, 9109634, 9109635, 9109636 retired - see the file's own retired-rules section) |
 | `rules/yara.yar` | YARA 4+ - tool/source fingerprint (intentionally PoC-specific; file/memory forensics use case, not network detection) |
 | `rules/sigma/` | Sigma (one rule per file) |
 | `rules/sentinel/phpup2026.kql` | Microsoft Sentinel KQL - feature-presence + process-spawn only; the OOM-amplification queries this file once had were retired 2026-10-21 (built on an AzureDiagnostics field, `requestBody_s`, that does not exist - see the file's own header comment) |

@@ -36,11 +36,28 @@
 # payload-bearing request, zero times on the benign request in the same
 # capture) and zero times on the two captures with no such payload.
 # 9109635 never fired in any of the four captures -- none of them happen
-# to exercise it, so it remains unverified, not confirmed. 9109636 fired
-# 325 and 288 times respectively in captures containing 2-3 requests
-# total -- proven non-functional, retired below with the real counts.
+# to exercise it, so at that point it remained unverified, not confirmed.
+# 9109636 fired 325 and 288 times respectively in captures containing
+# 2-3 requests total -- proven non-functional, retired below with the
+# real counts.
 #
-# SID range 9109627, 9109633, 9109635 (9109628-9109632, 9109634, 9109636 retired below)
+# 2026-10-21, later the same day: built a real, legitimate 4-file
+# upload (examples/pcaps/phpup2026-real-legit-multifile-benign.pcap --
+# each file 3 bytes of real content, not empty, server responded 200 OK
+# with all four files received intact) specifically to check two open
+# questions. Result: 9109633 did NOT fire on it -- confirms the PCRE's
+# negative lookahead `(?!\x0d\x0a)` correctly treats the blank line that
+# MIME requires between every part's headers and its body as a hard
+# stop, so it cannot cross from one legitimate part's Content-Disposition
+# into a different part's, regardless of file count or content size; not
+# an incidental result of this repo's earlier captures happening to have
+# large binary content between parts. 9109635 DID fire on it (see
+# examples/logs/phpup2026-eve-legit-multifile-fp.json) -- a real,
+# reproducible false positive on ordinary legitimate traffic, not a gap
+# in test coverage. Retired below with the real evidence, same as
+# 9109634/9109636.
+#
+# SID range 9109627, 9109633 (9109628-9109632, 9109634, 9109635, 9109636 retired below)
 
 # --- feature-presence / policy (low severity, high recall) ---
 
@@ -68,7 +85,13 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 session.upload
 # appears twice in one part" match via a PCRE backreference -- re-run
 # against the real capture after this fix and confirmed it now fires
 # (and does not fire on the paired benign capture). See
-# examples/INDEX.md for the verification record.
+# examples/INDEX.md for the verification record. 2026-10-21, later the
+# same day: also confirmed it does NOT false-positive on a real
+# legitimate 4-file upload (examples/pcaps/
+# phpup2026-real-legit-multifile-benign.pcap) -- the MIME blank-line
+# between every part's headers and body stops the backreference from
+# ever crossing from one legitimate part's Content-Disposition into
+# another's, independent of file count or content size.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate header name in one multipart part (OOM-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; pcre:"/\x0d\x0a([\x21-\x39\x3b-\x7e]+):[ \t]?[^\x0d\x0a]*(?:\x0d\x0a(?!\x0d\x0a)(?!\1:)[^\x0d\x0a]*){0,20}\x0d\x0a\1:/"; classtype:web-application-attack; sid:9109633; rev:3;)
 
 # 9109634 (density proxy, "3+ occurrences") retired 2026-10-21: an
@@ -79,21 +102,6 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate head
 # PCRE engineering than a simple backreference chain; not worth
 # shipping a second, weaker rule when 9109633 alone is verified working.
 # Revisit if real traffic shows 9109633 alone needs a coarser companion.
-
-# --- empty file-field amplification (low-medium confidence) ---
-#
-# Advisory text: "Empty file fields don't count toward max_file_uploads
-# but still create file metadata arrays." Many zero-byte file parts in
-# one request is a cheap way to inflate internal metadata without
-# tripping the upload-count limit. Approximated here as many
-# filename="..." occurrences with an immediately-following empty body
-# section (blank line straight to the next boundary) -- validate against
-# real traffic before relying on this; it is the least precisely
-# modeled rule in this file. Still unverified as of the 2026-10-21
-# re-verification pass: none of this repo's four example captures happen
-# to contain an empty-file-field request, so it never fired in that test
-# and has neither been confirmed nor disproven against real traffic.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 multiple empty file fields in multipart body (possible metadata-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"filename="; content:"filename="; distance:0; within:500; content:"filename="; distance:0; within:500; classtype:web-application-attack; sid:9109635; rev:1;)
 
 # --- retired (2026-10-21) ---
 #
@@ -109,6 +117,21 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 multiple empty
 #   correct mechanism. Retired, not just caveated.
 # 9109631/9109632 hostbit-correlation pair anchored on 9109630 -- dead
 #   along with its anchor.
+# 9109635 "multiple empty file fields in multipart body" -- retired
+#   2026-10-21 after a real test with a genuinely legitimate 4-file
+#   upload (examples/pcaps/phpup2026-real-legit-multifile-benign.pcap,
+#   each file 3 bytes of real content, server responded 200 OK) fired
+#   this rule anyway (examples/logs/phpup2026-eve-legit-multifile-fp.json).
+#   The rule's own content match -- three "filename=" occurrences within
+#   500 bytes -- never actually checked for emptiness, despite the
+#   rule's name and the advisory text it was supposedly modeling; any
+#   legitimate form with 3+ small file fields close together triggers
+#   it. A correct version would need to confirm zero bytes of body
+#   between each part's header blank-line and the next boundary, which
+#   needs more PCRE engineering than this rule had -- not worth
+#   reshipping without that fix. Proven false-positiving on ordinary
+#   traffic, not just unverified; retired with the real evidence, same
+#   standard as 9109634/9109636 above.
 # 9109636 "outbound connection from HTTP server shortly after a PHP
 #   worker fatal-error response" -- retired 2026-10-21 after live-testing
 #   against this repo's own real-capture pcaps (full re-verification
