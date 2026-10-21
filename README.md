@@ -65,14 +65,14 @@ confirmed trigger/consumer path, not by separate code. `ANALYSIS.md`,
 | Path | Format |
 |------|--------|
 | `iocs.json` | machine-readable IOCs - real mechanism details (fix-commit-grounded) and `this_artifact_only` (one PoC's literal strings) kept separate |
-| `rules/suricata.rules` | Suricata 7+ - OOM-amplification + feature-presence signals (SID 9109627, 9109633-9109636) |
+| `rules/suricata.rules` | Suricata 7+ - OOM-amplification + feature-presence signals (SID 9109627, 9109633, 9109635 active; 9109628-9109632, 9109634, 9109636 retired - see the file's own retired-rules section) |
 | `rules/yara.yar` | YARA 4+ - tool/source fingerprint (intentionally PoC-specific; file/memory forensics use case, not network detection) |
 | `rules/sigma/` | Sigma (one rule per file) |
 | `rules/sentinel/phpup2026.kql` | Microsoft Sentinel KQL |
 | `rules/sentinel/analytics-rules/` | Sentinel Analytics Rule YAML (one rule per file) |
 | `ANALYSIS.md` | technical writeup: the real fix-commit mechanism, codebase survey, what's unreproduced |
 | `HARDENING.md` | defense-in-depth hardening guide, layered beyond the primary mitigation |
-| `examples/` | sanitized pcap/http/log samples - see `examples/INDEX.md` (note: samples captured before the 2026-10-21 mechanism rewrite reflect the old, now-retired trigger theory; re-validate against the new rules before trusting them as positives) |
+| `examples/` | sanitized pcap/http/log samples - see `examples/INDEX.md` (all samples from before the mechanism rewrite that depended on the now-retired trigger theory were deleted, not kept; everything currently in this directory is a real capture validated against the current rules - see INDEX.md's per-file verification record) |
 | `scripts/sigma_eval.py` | minimal real Sigma-condition evaluator |
 
 ## Detection philosophy

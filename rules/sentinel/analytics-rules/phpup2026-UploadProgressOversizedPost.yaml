@@ -19,6 +19,19 @@ description: |
   Does NOT require PHP_SESSION_UPLOAD_PROGRESS or a PHPSESSID cookie --
   the OOM-amplification trigger works against any multipart upload
   endpoint, not only session.upload_progress users.
+
+  2026-10-21 second fix, same day: the rewrite above still matched only
+  a literal duplicated "Content-Disposition" string. A real lab
+  reproduction (github.com/rjmendez/phpup-2026, examples/pcaps/
+  phpup2026-real-oom-amplification.pcap) used an arbitrary short header
+  name instead, for maximum entries-per-byte - a rule keyed on one
+  literal name is under-inclusive against any attacker optimizing for
+  amplification density, including that real reproduction. Replaced the
+  literal match with a generic "any header name repeated within one
+  request body" check (extract all header-looking tokens, group, flag
+  duplicates). A sibling bug in this repo's own Suricata rule (same
+  literal-match mistake) was caught and fixed the same way; see
+  rules/suricata.rules for the live-fire verification record.
   References:
   - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
   - https://github.com/rjmendez/phpup-2026'
@@ -44,14 +57,19 @@ query: |
   AzureDiagnostics
   | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
   | where requestBody_s has "multipart/form-data"
-  | extend CDCount = countof(requestBody_s, "Content-Disposition")
-  | where CDCount >= 2
+  | extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
+  | mv-expand HeaderName = HeaderNames to typeof(string)
+  | summarize HeaderOccurrences = count()
+      by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, HeaderName
+  | where HeaderOccurrences >= 2
+  | summarize MaxDuplicateCount = max(HeaderOccurrences), DuplicatedHeaderNames = make_set(HeaderName)
+      by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d
   | extend
       HostName = tostring(split(host_s, ".")[0]),
       DomainIndex = toint(indexof(host_s, "."))
   | extend HostNameDomain = iff(DomainIndex != -1, substring(host_s, DomainIndex + 1), host_s)
-  | project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, CDCount,
-            HostName, HostNameDomain
+  | project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, MaxDuplicateCount,
+            DuplicatedHeaderNames, HostName, HostNameDomain
 entityMappings:
   - entityType: IP
     fieldMappings:
@@ -63,7 +81,7 @@ entityMappings:
         columnName: HostName
       - identifier: DnsDomain
         columnName: HostNameDomain
-version: 2.0.0
+version: 2.1.0
 kind: Scheduled
 metadata:
     source:

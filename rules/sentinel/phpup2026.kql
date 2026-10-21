@@ -53,18 +53,30 @@ CommonSecurityLog
 // PHP_SESSION_UPLOAD_PROGRESS - CVE-2026-109618's OOM trigger works on any
 // multipart upload endpoint, not just session.upload_progress users.
 
-// [T2-1] Duplicate Content-Disposition/Content-Type header in one multipart
-// part - Azure WAF. The fix (main/rfc1867.c) restricts header saving to
-// these two names and skips duplicates; a legitimate part has exactly one
+// [T2-1] Duplicate header name in one multipart part - Azure WAF. The fix
+// (main/rfc1867.c) restricts header saving to Content-Disposition/
+// Content-Type and skips duplicates; a legitimate part has exactly one
 // Content-Disposition (optionally one Content-Type). Requires WAF request
 // body inspection enabled.
+// 2026-10-21 fix: this previously counted literal "Content-Disposition"
+// occurrences (countof(requestBody_s, "Content-Disposition") >= 2) - a
+// real lab reproduction (github.com/rjmendez/phpup-2026, examples/pcaps/
+// phpup2026-real-oom-amplification.pcap) used an arbitrary short header
+// name instead, for maximum entries-per-byte, which that literal match
+// would miss entirely. Replaced with a generic "any header name repeated
+// within one request body" check.
 AzureDiagnostics
 | where TimeGenerated > ago(1h)
 | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
 | where requestBody_s has "multipart/form-data"
-| extend CDCount = countof(requestBody_s, "Content-Disposition")
-| where CDCount >= 2
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, CDCount
+| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
+| mv-expand HeaderName = HeaderNames to typeof(string)
+| summarize HeaderOccurrences = count()
+    by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, HeaderName
+| where HeaderOccurrences >= 2
+| summarize MaxDuplicateCount = max(HeaderOccurrences), DuplicatedHeaderNames = make_set(HeaderName)
+    by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d
+| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, MaxDuplicateCount, DuplicatedHeaderNames
 
 
 // [T2-2] High header density in multipart body - IIS (size proxy)
@@ -128,12 +140,19 @@ SecurityEvent
 // Burst-over-time complement to T2-1: repeated amplification attempts
 // from one source in a short window, regardless of whether any one
 // request alone crosses the threshold.
+// 2026-10-21 fix: same under-inclusive literal-match bug as T2-1 (see
+// that query's comment) - replaced with the same generic duplicate-
+// header-name check before the burst aggregation.
 AzureDiagnostics
 | where TimeGenerated > ago(15m)
 | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
 | where requestBody_s has "multipart/form-data"
-| extend CDCount = countof(requestBody_s, "Content-Disposition")
-| where CDCount >= 2
+| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
+| mv-expand HeaderName = HeaderNames to typeof(string)
+| summarize HeaderOccurrences = count()
+    by TimeGenerated, clientIP_s, host_s, requestUri_s, HeaderName
+| where HeaderOccurrences >= 2
+| summarize dummy = 1 by TimeGenerated, clientIP_s, host_s, requestUri_s
 | summarize
     Hits    = count(),
     Targets = make_set(requestUri_s, 5)
@@ -146,13 +165,17 @@ AzureDiagnostics
 // that showed a T2-1 amplification hit within the prior hour. Still
 // speculative: this does not confirm "same worker," only "same host,
 // recently." Tool-agnostic (no distribution-domain IOC).
+// 2026-10-21 fix: same under-inclusive literal-match bug as T2-1/T3-3/H2
+// (see T2-1's comment) - fixed the same way.
 let suspectHosts =
     AzureDiagnostics
     | where TimeGenerated > ago(1h)
     | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
     | where requestBody_s has "multipart/form-data"
-    | extend CDCount = countof(requestBody_s, "Content-Disposition")
-    | where CDCount >= 2
+    | extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
+    | mv-expand HeaderName = HeaderNames to typeof(string)
+    | summarize HeaderOccurrences = count() by TimeGenerated, host_s, HeaderName
+    | where HeaderOccurrences >= 2
     | project MatchTime = TimeGenerated, host_s;
 DeviceNetworkEvents
 | where TimeGenerated > ago(1h)
@@ -174,18 +197,27 @@ AzureDiagnostics
           httpStatus_d, requestBody_s
 
 
-// [H2] Distribution of Content-Disposition occurrences per multipart
+// [H2] Distribution of max per-header-name duplicate count per multipart
 // request - Azure WAF. Baseline this against normal legitimate multi-file
 // upload traffic before setting an alerting threshold on T2-1/T3-3; a form
 // with many real file fields also has many Content-Disposition headers,
 // just not duplicated ones within a single part.
+// 2026-10-21 fix: previously counted literal "Content-Disposition" only
+// (same bug as T2-1/T3-3) - a baseline built that way would never show
+// the real attack technique's signature at all (it uses other header
+// names), making the "is this normal" comparison meaningless. Fixed to
+// measure the same generic duplicate-header-name signal T2-1 alerts on.
 AzureDiagnostics
 | where TimeGenerated > ago(24h)
 | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
 | where requestBody_s has "multipart/form-data"
-| extend CDCount = countof(requestBody_s, "Content-Disposition")
-| summarize RequestCount = count() by CDCount
-| sort by CDCount asc
+| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
+| mv-expand HeaderName = HeaderNames to typeof(string)
+| summarize HeaderOccurrences = count()
+    by TimeGenerated, clientIP_s, host_s, requestUri_s, HeaderName
+| summarize MaxDuplicateCount = max(HeaderOccurrences) by TimeGenerated, clientIP_s, host_s, requestUri_s
+| summarize RequestCount = count() by MaxDuplicateCount
+| sort by MaxDuplicateCount asc
 
 
 // ── RETIRED (2026-10-21) ──────────────────────────────────────────────────────
