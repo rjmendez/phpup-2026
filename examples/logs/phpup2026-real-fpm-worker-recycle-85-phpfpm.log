@@ -47,3 +47,29 @@
 [21-Oct-2026 15:52:53] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
 [21-Oct-2026 15:52:53] NOTICE: fpm is running, pid 1924285
 [21-Oct-2026 15:52:53] NOTICE: ready to handle connections
+[21-Oct-2026 15:55:46] NOTICE: Terminating ...
+[21-Oct-2026 15:55:46] NOTICE: exiting, bye-bye!
+[21-Oct-2026 16:02:23] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:02:23] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:02:23] NOTICE: fpm is running, pid 1941382
+[21-Oct-2026 16:02:23] NOTICE: ready to handle connections
+[21-Oct-2026 16:02:25] NOTICE: Terminating ...
+[21-Oct-2026 16:02:25] NOTICE: exiting, bye-bye!
+[21-Oct-2026 16:02:26] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:02:26] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:02:26] NOTICE: fpm is running, pid 1941447
+[21-Oct-2026 16:02:26] NOTICE: ready to handle connections
+[21-Oct-2026 16:03:02] NOTICE: Terminating ...
+[21-Oct-2026 16:03:02] NOTICE: exiting, bye-bye!
+[21-Oct-2026 16:03:03] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:03:03] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:03:03] NOTICE: fpm is running, pid 1942185
+[21-Oct-2026 16:03:03] NOTICE: ready to handle connections
+[21-Oct-2026 16:03:04] WARNING: [pool www85] child 1942186 exited with code 70 after 1.139314 seconds from start
+[21-Oct-2026 16:03:04] NOTICE: [pool www85] child 1942198 started
+[21-Oct-2026 16:03:04] NOTICE: Terminating ...
+[21-Oct-2026 16:03:04] NOTICE: exiting, bye-bye!
+[21-Oct-2026 16:03:05] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:03:05] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 16:03:05] NOTICE: fpm is running, pid 1942257
+[21-Oct-2026 16:03:05] NOTICE: ready to handle connections

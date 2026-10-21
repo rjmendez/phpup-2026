@@ -18,9 +18,29 @@
 # One rule per physical line below - Suricata requires this (confirmed
 # against 7.0.3). `bsize`, not `dsize`, for the reassembled
 # http.request_body buffer (dsize is a raw per-packet match and cannot be
-# combined with http.* sticky buffers).
+# combined with http.* sticky buffers). A literal `;` inside a PCRE
+# character class (e.g. `[!-9;-~]`) also breaks Suricata's own rule-option
+# tokenizer, even quoted inside the pcre value -- confirmed 2026-10-21
+# against 7.0.3 with a 3-rule minimal reproduction; use \x3b instead.
 #
-# SID range 9109627, 9109633-9109636 (9109628-9109632 retired below)
+# 2026-10-21 full re-verification: every rule below was actually run with
+# `suricata -S ... -r <pcap> -k none` against all four real captures in
+# examples/pcaps/ (not just reasoned about). `-k none` is required for the
+# two loopback-captured pcaps (oom-amplification, fpm-worker-recycle-85)
+# -- Suricata rejects their packets as checksum-invalid by default because
+# loopback capture skips real checksum computation; the two anonymized
+# captures (benign-upload-progress, stall-no-crash) don't have this
+# artifact. Results: 9109627 fired exactly once on each of the two
+# captures that should trigger it and zero times elsewhere; 9109633 fired
+# exactly twice on each of the two crash+survive captures (once per
+# payload-bearing request, zero times on the benign request in the same
+# capture) and zero times on the two captures with no such payload.
+# 9109635 never fired in any of the four captures -- none of them happen
+# to exercise it, so it remains unverified, not confirmed. 9109636 fired
+# 325 and 288 times respectively in captures containing 2-3 requests
+# total -- proven non-functional, retired below with the real counts.
+#
+# SID range 9109627, 9109633, 9109635 (9109628-9109632, 9109634, 9109636 retired below)
 
 # --- feature-presence / policy (low severity, high recall) ---
 
@@ -35,26 +55,30 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 session.upload
 
 # --- OOM-amplification producer signal (medium-high confidence) ---
 #
-# Grounded directly in the fix diff: main/rfc1867.c's
-# multipart_buffer_headers() previously saved every header line in a
-# multipart part unconditionally; the fix restricts it to
-# Content-Disposition/Content-Type and skips duplicates. A legitimate
-# part has exactly one Content-Disposition header (optionally one
-# Content-Type). A SECOND Content-Disposition occurrence within a tight
-# byte window of the first is the duplicate-header pattern the fix
-# specifically closes -- real amplification, not an artifact of one PoC
-# tool's byte layout.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate Content-Disposition header in one multipart part (OOM-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"Content-Disposition"; content:"Content-Disposition"; distance:0; within:300; classtype:web-application-attack; sid:9109633; rev:1;)
+# 2026-10-21 fix: this rule originally pattern-matched the literal string
+# "Content-Disposition" duplicated. Verified against this repo's own
+# real OOM-amplification capture (examples/pcaps/
+# phpup2026-real-oom-amplification.pcap) that it DID NOT FIRE -- the real
+# vulnerable code (main/rfc1867.c pre-fix) saves ANY header line
+# regardless of name, so the actual reproduction used a short arbitrary
+# name ("A:0" x1.4M) for maximum entries-per-byte, not literally
+# "Content-Disposition" repeated. A rule keyed on one literal header name
+# is under-inclusive against a competent attacker optimizing for
+# amplification density. Replaced with a generic "same header name
+# appears twice in one part" match via a PCRE backreference -- re-run
+# against the real capture after this fix and confirmed it now fires
+# (and does not fire on the paired benign capture). See
+# examples/INDEX.md for the verification record.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate header name in one multipart part (OOM-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; pcre:"/\x0d\x0a([\x21-\x39\x3b-\x7e]+):[ \t]?[^\x0d\x0a]*(?:\x0d\x0a(?!\x0d\x0a)(?!\1:)[^\x0d\x0a]*){0,20}\x0d\x0a\1:/"; classtype:web-application-attack; sid:9109633; rev:3;)
 
-# Coarser amplification proxy: an unusually high density of
-# Content-Disposition/Content-Type header occurrences in a short span of
-# the body. Legitimate multi-file forms have one such header per file
-# field, spaced out by file content between them; many occurrences
-# packed into a small byte window is not normal legitimate usage.
-# Approximate by construction (Suricata has no native occurrence-count
-# keyword) -- tune the distance/within values against this deployment's
-# real multi-file-upload traffic before alerting on this alone.
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 high header density in multipart body (possible OOM-amplification)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"Content-Disposition"; content:"Content-Disposition"; distance:0; within:2000; content:"Content-Disposition"; distance:0; within:2000; content:"Content-Disposition"; distance:0; within:2000; classtype:web-application-attack; sid:9109634; rev:1;)
+# 9109634 (density proxy, "3+ occurrences") retired 2026-10-21: an
+# attempted extension of the 9109633 pattern to require a third
+# occurrence did not match its own should-match test cases in Python
+# (re.search) before it was ever deployed -- caught in testing, not
+# shipped broken. A correct N-occurrence generic rule needs more
+# PCRE engineering than a simple backreference chain; not worth
+# shipping a second, weaker rule when 9109633 alone is verified working.
+# Revisit if real traffic shows 9109633 alone needs a coarser companion.
 
 # --- empty file-field amplification (low-medium confidence) ---
 #
@@ -65,19 +89,11 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 high header de
 # filename="..." occurrences with an immediately-following empty body
 # section (blank line straight to the next boundary) -- validate against
 # real traffic before relying on this; it is the least precisely
-# modeled rule in this file.
+# modeled rule in this file. Still unverified as of the 2026-10-21
+# re-verification pass: none of this repo's four example captures happen
+# to contain an empty-file-field request, so it never fired in that test
+# and has neither been confirmed nor disproven against real traffic.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 multiple empty file fields in multipart body (possible metadata-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"filename="; content:"filename="; distance:0; within:500; content:"filename="; distance:0; within:500; classtype:web-application-attack; sid:9109635; rev:1;)
-
-# --- post-exploitation (behavioral, unchanged in kind, low confidence) ---
-#
-# Still honestly speculative: we don't have a validated "exploitation
-# confirmed" signal to anchor a host-correlation marker on (the old
-# anchor, the forged-zval structural match, is retired above). This rule
-# is retained only as a generic, tool-agnostic "shell/worker spawned a
-# process that then talks out" indicator independent of any specific
-# trigger theory, and should be tuned heavily; expect false positives
-# from legitimate outbound calls made by the application itself.
-alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"PHPUP2026 outbound connection from HTTP server shortly after a PHP worker fatal-error response (tune/correlate, unvalidated anchor)"; flow:to_server,established; classtype:trojan-activity; sid:9109636; rev:1;)
 
 # --- retired (2026-10-21) ---
 #
@@ -92,6 +108,18 @@ alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"PHPUP2026 outbound connec
 #   artifact's own code, which VulnCheck reports does not have the
 #   correct mechanism. Retired, not just caveated.
 # 9109631/9109632 hostbit-correlation pair anchored on 9109630 -- dead
-#   along with its anchor. A replacement correlation rule needs a
-#   validated primary signal first; see 9109636 above for the
-#   placeholder in the meantime.
+#   along with its anchor.
+# 9109636 "outbound connection from HTTP server shortly after a PHP
+#   worker fatal-error response" -- retired 2026-10-21 after live-testing
+#   against this repo's own real-capture pcaps (full re-verification
+#   pass, see examples/INDEX.md): it has no content match at all, just
+#   $HTTP_SERVERS -> $EXTERNAL_NET + flow:to_server,established, so it
+#   fired 325 times in phpup2026-real-oom-amplification.pcap and 288
+#   times in phpup2026-real-fpm-worker-recycle-85.pcap -- both captures
+#   contain only 2-3 HTTP requests total. That is not a correlatable
+#   signal, it is "a TCP connection existed." A replacement needs a
+#   validated primary signal to anchor on first; the better-grounded
+#   anchor we do have now is host-based, not network-based: php-fpm
+#   logging "exited with code 70 (unrecoverable fatal error)" followed
+#   by a new child PID handling the next request on the same pool. See
+#   iocs.json's host_indicators section.
