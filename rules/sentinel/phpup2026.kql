@@ -1,0 +1,198 @@
+// phpup-2026 — Microsoft Sentinel KQL Detection Queries
+// CVE-2026-109618 / CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+//
+// Table coverage:
+//   W3CIISLog              IIS web server logs
+//   CommonSecurityLog      WAF / proxy / firewall (CEF)
+//   AzureDiagnostics       Azure WAF (App Gateway / Front Door)
+//   DeviceNetworkEvents    MDE network events
+//   DeviceProcessEvents    MDE process creation
+//   SecurityEvent          Windows Security (EventID 4688)
+//
+// Tier 1 rules are exact POC signatures — zero FP, alert-grade.
+// Tier 2 rules are behavioral — tune lookback/threshold before alerting.
+
+
+// ── TIER 1: EXACT POC SIGNATURES ─────────────────────────────────────────────
+
+// [T1-1] Hardcoded POC multipart boundary — IIS
+// Source: poc0_109618.py L63, poc1_109619.py L55
+W3CIISLog
+| where TimeGenerated > ago(1h)
+| where csMethod == "POST"
+| where csUriStem has_any ("B7kQpoc618", "B7kQpoc619")
+    or csUriQuery has_any ("B7kQpoc618", "B7kQpoc619")
+| project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
+
+
+// [T1-2] Hardcoded POC boundary — Azure WAF / App Gateway
+AzureDiagnostics
+| where TimeGenerated > ago(1h)
+| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
+| where httpHeaders_s has "B7kQpoc61"
+       or requestUri_s has_any ("B7kQpoc618", "B7kQpoc619")
+| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, userAgent_s
+
+
+// [T1-3] POC User-Agent strings — IIS
+// poc0 deliver_live() sets "php2shell-109618", poc1 talk() sets "php2shell-109619"
+W3CIISLog
+| where TimeGenerated > ago(1h)
+| where csUserAgent has_any ("php2shell-109618", "php2shell-109619")
+| project TimeGenerated, cIP, csHost, csUriStem, csUserAgent, scStatus
+
+
+// [T1-4] POC User-Agent strings — CommonSecurityLog (WAF / proxy)
+CommonSecurityLog
+| where TimeGenerated > ago(1h)
+| where RequestClientApplication has_any ("php2shell-109618", "php2shell-109619")
+| project TimeGenerated, SourceIP, DestinationHostName, RequestURL,
+          RequestClientApplication, EventOutcome
+
+
+// [T1-5] Default POC session IDs in Cookie — IIS
+// poc0/poc1 default: "a1b2c3d4e5f6a7b8c9d0e1f2a3"; poc_trigger: 32x 'a'
+W3CIISLog
+| where TimeGenerated > ago(1h)
+| where csCookie has_any (
+    "PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3",
+    "PHPSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  )
+| project TimeGenerated, cIP, csHost, csUriStem, csCookie, scStatus
+
+
+// [T1-6] Default POC session IDs — CommonSecurityLog
+CommonSecurityLog
+| where TimeGenerated > ago(1h)
+| where Message has_any (
+    "PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3",
+    "PHPSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  )
+| project TimeGenerated, SourceIP, DestinationHostName, RequestURL, Message
+
+
+// [T1-7] JACKALPOC canary in HTTP response — confirms successful RCE
+// Both POCs inject this string via --command default: "uname -a; id; echo JACKALPOC"
+// Requires proxy/DLP with response body capture
+CommonSecurityLog
+| where TimeGenerated > ago(1h)
+| where Message has "JACKALPOC"
+| project TimeGenerated, SourceIP, DestinationHostName, RequestURL, Message
+
+
+// [T1-8] Outbound connection to artifact distribution domain
+// jackalsyn.com is the artifact host; post-exploitation beaconing risk
+DeviceNetworkEvents
+| where TimeGenerated > ago(1h)
+| where RemoteUrl has "jackalsyn.com"
+    or RemoteIP == "jackalsyn.com"  // resolve before deploying
+| project TimeGenerated, DeviceName, InitiatingProcessFileName,
+          RemoteUrl, RemotePort, RemoteIP
+
+
+// ── TIER 2: BEHAVIORAL SIGNALS ────────────────────────────────────────────────
+
+// [T2-1] Large multipart POST with PHPSESSID cookie — IIS
+// Both CVEs require: POST + multipart/form-data + PHPSESSID + large body.
+// FP: legitimate file uploads with session tracking — tune csBytes threshold.
+W3CIISLog
+| where TimeGenerated > ago(1h)
+| where csMethod == "POST"
+| where csCookie has "PHPSESSID="
+| where csBytes >= 10000
+| summarize
+    RequestCount = count(),
+    MaxBytes = max(csBytes),
+    URIs = make_set(csUriStem, 10)
+    by bin(TimeGenerated, 5m), cIP, csHost
+| where RequestCount >= 1
+| project TimeGenerated, cIP, csHost, RequestCount, MaxBytes, URIs
+
+
+// [T2-2] Shell spawned under PHP/web server process — MDE
+// Indicates successful RCE via system() from the forged zend_fcall_info chain.
+// Parent: php-fpm, php, lsphp, httpd, nginx. Child: shell or recon tools.
+DeviceProcessEvents
+| where TimeGenerated > ago(1h)
+| where InitiatingProcessFileName has_any ("php-fpm", "php", "lsphp", "httpd", "apache2", "nginx")
+| where FileName has_any ("sh", "bash", "python", "python3", "perl", "curl", "wget", "nc", "ncat", "nmap")
+       or ProcessCommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c", "exec(", "eval(")
+| project TimeGenerated, DeviceName, AccountName,
+          InitiatingProcessFileName, InitiatingProcessCommandLine,
+          FileName, ProcessCommandLine
+
+
+// [T2-3] Shell spawned under web service account — SecurityEvent 4688
+// For environments not running MDE. Requires process creation auditing enabled
+// (Security Policy: Audit Process Creation + command-line in audit).
+SecurityEvent
+| where TimeGenerated > ago(1h)
+| where EventID == 4688
+| where SubjectUserName has_any ("www-data", "apache", "nobody", "lsphp", "iis apppool")
+| where NewProcessName has_any ("sh", "bash", "python", "curl", "wget", "nc")
+       or CommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c")
+| project TimeGenerated, Computer, SubjectUserName,
+          ParentProcessName, NewProcessName, CommandLine
+
+
+// [T2-4] Spike in large multipart POSTs from single IP — IIS
+// Upload-progress spray sends 149 form fields; total body is typically 50-70 KB.
+// Tune: adjust csBytes floor and request threshold to fit baseline traffic.
+W3CIISLog
+| where TimeGenerated > ago(15m)
+| where csMethod == "POST"
+| where csBytes >= 40000
+| summarize
+    PostCount = count(),
+    Targets   = make_set(csUriStem, 5)
+    by bin(TimeGenerated, 5m), cIP, csHost
+| where PostCount >= 3
+| project TimeGenerated, cIP, csHost, PostCount, Targets
+
+
+// [T2-5] Combined high-confidence pattern — IIS
+// POST + large body + PHPSESSID cookie + 4xx/5xx response anomaly.
+// A crashed PHP worker returns 502/503; a successful RCE may return 200 with command output.
+W3CIISLog
+| where TimeGenerated > ago(1h)
+| where csMethod == "POST"
+| where csCookie has "PHPSESSID="
+| where csBytes >= 10000
+| where scStatus in ("200", "502", "503")
+| summarize
+    TotalRequests = count(),
+    Status502or503 = countif(scStatus in ("502","503")),
+    Status200      = countif(scStatus == "200"),
+    MaxBytes       = max(csBytes),
+    URIs           = make_set(csUriStem, 5)
+    by bin(TimeGenerated, 10m), cIP, csHost
+| where TotalRequests >= 2
+| extend WorkerCrashRatio = todouble(Status502or503) / todouble(TotalRequests)
+| project TimeGenerated, cIP, csHost, TotalRequests, Status200,
+          Status502or503, WorkerCrashRatio, MaxBytes, URIs
+| sort by WorkerCrashRatio desc
+
+
+// ── HUNTING ───────────────────────────────────────────────────────────────────
+
+// [H1] PHP_SESSION_UPLOAD_PROGRESS in request body — Azure WAF
+// Requires WAF request body inspection enabled. Low volume on benign sites.
+AzureDiagnostics
+| where TimeGenerated > ago(24h)
+| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
+| where requestBody_s has "PHP_SESSION_UPLOAD_PROGRESS"
+| project TimeGenerated, clientIP_s, host_s, requestUri_s,
+          httpStatus_d, requestBody_s
+
+
+// [H2] 149-field t[] pattern — Azure WAF with body inspection
+// 149 repeated t[] fields is the spray count. Legitimate apps rarely send 100+
+// identically-named array fields in a single request.
+AzureDiagnostics
+| where TimeGenerated > ago(24h)
+| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
+| where requestBody_s has "name=\"t[]\"" or requestBody_s has "name='t[]'"
+| extend TArrayCount = countof(requestBody_s, "name=\"t[]\"")
+| where TArrayCount >= 100
+| project TimeGenerated, clientIP_s, host_s, requestUri_s,
+          httpStatus_d, TArrayCount
