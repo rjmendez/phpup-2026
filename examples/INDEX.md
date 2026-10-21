@@ -5,7 +5,14 @@ an unlabeled sample isn't usable for regression-testing the rules.
 
 | File | CVE | Path | Build | Outcome | Should trigger | Notes |
 |------|-----|------|-------|---------|-----------------|-------|
-| _(none yet)_ | | | | | | |
+# Sample index
+
+One row per file added under `pcaps/`, `http/`, or `logs/`. Keep it current —
+an unlabeled sample isn't usable for regression-testing the rules.
+
+| File | CVE | Path | Build | Outcome | Should trigger | Notes |
+|------|-----|------|-------|---------|-----------------|-------|
+| `pcaps/phpup2026-real-blob-CVE-109618-dtor0.pcap` | 109618 | `FILE_DATA stall` | n/a (dtor=0) | crash (null call addr) | `9109629`, `9109630` | 5-packet TCP session (SYN/SYNACK/ACK/DATA/FIN). src=`203.0.113.42` (TEST-NET-3). Real `forge()` blob layout: IS_STRING_EX@+16, IS_OBJECT_EX@+160, `system\0id\0`@+200. `PHP_SESSION_UPLOAD_PROGRESS` + PHPSESSID cookie present. No RCE (call_addr=0). |
 
 **Path** — `FILE_DATA stall` (the confirmed exploit path) or `END` (ruled out,
 logic bug only — see root `ANALYSIS.md`; a capture of this path is a
