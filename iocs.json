@@ -10,9 +10,9 @@
   "vulnerability": {
     "required_fields": ["PHP_SESSION_UPLOAD_PROGRESS", "PHPSESSID"],
     "trigger_paths": [
-      "FILE_DATA stall >= session.upload_progress.min_freq (default 1.0s)",
-      "MULTIPART_EVENT_END with rfc1867_cleanup=0 and refcount>1 (SEPARATE_ARRAY COW), no stall required"
+      "FILE_DATA stall >= session.upload_progress.min_freq (default 1.0s) — the only confirmed independently-exploitable path (CVE-2026-109618/109619)"
     ],
+    "not_a_trigger_path": "MULTIPART_EVENT_END with rfc1867_cleanup=0 and refcount>1 (SEPARATE_ARRAY COW) — re-traced and ruled out: the stale post_bytes_processed write lands on the old array while it is still live; php_session_initialize() frees it only afterward, and the pointer is never dereferenced again. Logic/correctness bug, not a third exploitable primitive. (An earlier Loci finding claimed this was an independent exploit path; superseded.)",
     "mitigation": "session.upload_progress.enabled = 0",
     "patched": "PHP 8.2.35+ / 8.4.5+"
   },
