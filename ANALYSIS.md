@@ -180,16 +180,18 @@ source to test the advisory's "strongest demonstrated case":
   `memory_limit` below that peak (tested 2M/16M/128M/256M), the
   **worker process dies and is replaced, on 8.5 exactly as on 8.3**.
   `fatal_error_backtraces` being on did not change this.
-- **The exit code is always `70`, PHP-FPM's own internal
-  "unrecoverable state" exit code** - this is FPM's process-supervision
-  model itself recycling the child, not a bare SIGSEGV/kernel-level
-  kill. That strongly suggests **php-fpm's own worker-recycling-on-fatal
-  behavior is an incidental, pre-existing mitigation** against this
-  specific bug's cross-request consumer step: a replaced worker can't
-  carry forward dangling globals to the next request. This would also
-  explain why the advisory names **mod_php** (embedded in each Apache
-  child/thread, no equivalent per-request process recycling) as where
-  RCE was confirmed, rather than php-fpm.
+- **The exit code is always `70`** (`FPM_EXIT_SOFTWARE`, sysexits.h's
+  generic "internal software error", not a bailout-specific code - see
+  the source-level explanation below for what actually triggers it)
+  **- this is FPM's process-supervision model itself recycling the
+  child, not a bare SIGSEGV/kernel-level kill.** That strongly suggests
+  **php-fpm's own worker-recycling-on-fatal behavior is an incidental,
+  pre-existing mitigation** against this specific bug's cross-request
+  consumer step: a replaced worker can't carry forward dangling globals
+  to the next request. This would also explain why the advisory names
+  **mod_php** (embedded in each Apache child/thread, no equivalent
+  per-request process recycling) as where RCE was confirmed, rather
+  than php-fpm.
 - **2026-10-21, built the Apache + mod_php lab and tested the
   hypothesis directly.** Genuinely pre-patch build confirmed the same
   way as the php-fpm builds: `libapache2-mod-php8.3=8.3.6-0maysync1`,
@@ -222,28 +224,53 @@ source to test the advisory's "strongest demonstrated case":
   worker on this condition the way php-fpm's process supervisor does**,
   so the cross-request window CVE-2026-109619 needs is structurally
   open here in a way it is not on php-fpm.
-- **Important caveat, not yet resolved**: the PHP-level error text in
-  this mod_php test was the *ordinary*, long-recoverable "Allowed
-  memory size of N bytes exhausted (tried to allocate 4096 bytes)"
-  message - the routine incremental `memory_limit` check, not the
-  distinct "Out of memory (allocated N) (tried to allocate N bytes)"
-  message that identifies the actual `zend_mm_safe_error`/bailout
-  branch this CVE pair is about. This was true at every tested
-  `memory_limit` from 2M to 1024M under mod_php, with no exception.
-  The paired php-fpm log (`examples/logs/
-  phpup2026-real-oom-amplification-phpfpm.log`) only records FPM's own
-  process-supervisor message ("exited with code 70"), not PHP's
-  internal error text, so there is no direct side-by-side confirmation
-  that the php-fpm crash and this mod_php survival are hitting the
-  identical internal code path rather than merely the same outward
-  `memory_limit` value. It remains possible mod_php's worker "survives"
-  here because this specific test never reaches the actual vulnerable
-  bailout branch at all under mod_php's allocation pattern, rather than
-  because it reaches that branch and recovers from it. Confirming or
-  ruling this out needs either an ASAN/debug PHP build (to catch the
-  bailout at the source level directly) or a producer trigger that is
-  independently known to force the large/chunk allocation path
-  `zend_mm_safe_error` specifically handles.
+- **The caveat first written here (that "Allowed memory size exhausted"
+  might be a separate, non-buggy code path from the real bailout) was
+  wrong - retracted, not just softened.** Checked directly against
+  `php-src` at the fix commit's parent (`670052c`, i.e. the last
+  pre-patch state of `Zend/zend_alloc.c`): both the "Allowed memory
+  size of %zu bytes exhausted..." message (the `memory_limit` case)
+  and the "Out of memory (allocated %zu)..." message (the true-OOM
+  case) are emitted by calls to **the exact same function**,
+  `zend_mm_safe_error()` (`Zend/zend_alloc.c:369`), which unconditionally
+  calls `zend_bailout()` after logging either message - there is no
+  separate "recoverable" branch distinguished by which message fires.
+  Every memory_limit-triggered fatal this payload produces, on every
+  SAPI, goes through the identical `zend_mm_safe_error` ->
+  `zend_bailout()` sequence this CVE pair is about.
+- **Found the actual mechanism for why php-fpm kills the worker and
+  mod_php doesn't - it's one explicit, narrow check, not a general
+  policy difference.** `sapi/fpm/fpm/fpm_main.c`'s request loop
+  (confirmed at the same pre-patch commit) does exactly this:
+  `if (php_request_startup() == FAILURE) { ...; return
+  FPM_EXIT_SOFTWARE; }` (`FPM_EXIT_SOFTWARE` = 70, BSD sysexits.h's
+  generic "internal software error"). `php_request_startup()` is what
+  runs the vulnerable `main/rfc1867.c` multipart-header parsing while
+  building `$_POST`/`$_FILES` - when the bailout unwinds through it
+  before it finishes, it returns `FAILURE`, and FPM's own main loop
+  treats *specifically* "request initialization itself didn't
+  complete" (not "a fatal error happened somewhere in this request")
+  as grounds to self-exit the whole worker. By contrast,
+  `sapi/apache2handler/sapi_apache2.c`'s equivalent entry point
+  (`php_apache_request_ctor`, line 541 in that same pre-patch file)
+  just does `return php_request_startup();` and passes the result
+  straight back to Apache's own request-handling hook - no exit/abort
+  call anywhere tied to that return value. An ordinary mid-script
+  fatal (after `php_request_startup()` already returned `SUCCESS` and
+  user code is running) bails out through a *different* catch point in
+  both SAPIs and never touches this check at all, which is also why
+  ordinary fatals were already observed to survive cleanly on every
+  SAPI tested here.
+- **Conclusion, now source-grounded rather than inferred from exit
+  codes alone**: php-fpm's worker death is a deliberate, narrowly
+  scoped FPM design decision reacting to one specific condition
+  (request-startup bailout), not a general crash-safety difference
+  between PHP builds or SAPIs, and not evidence that mod_php somehow
+  avoids the real vulnerable code path - it reaches the identical
+  `zend_bailout()` call and simply has no corresponding self-exit logic
+  to react to it. This is exactly the condition CVE-2026-109619's
+  cross-request step needs, and mod_php has no structural barrier to
+  it the way php-fpm's `fpm_main.c` check incidentally provides.
 - Also still unconfirmed: an end-to-end RCE or ASAN use-after-free under
   whichever producer trigger does leave a surviving worker, and which
   early-init paths beyond `php_session_rfc1867_callback` and

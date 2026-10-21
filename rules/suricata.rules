@@ -120,6 +120,8 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 multiple empty
 #   signal, it is "a TCP connection existed." A replacement needs a
 #   validated primary signal to anchor on first; the better-grounded
 #   anchor we do have now is host-based, not network-based: php-fpm
-#   logging "exited with code 70 (unrecoverable fatal error)" followed
+#   logging "exited with code 70 after N seconds from start" followed
 #   by a new child PID handling the next request on the same pool. See
-#   iocs.json's host_indicators section.
+#   iocs.json's host_indicators section for exactly what that exit code
+#   does and doesn't confirm (2026-10-21 correction: it's one specific
+#   fpm_main.c check, not a distinct "unrecoverable" engine-level path).
