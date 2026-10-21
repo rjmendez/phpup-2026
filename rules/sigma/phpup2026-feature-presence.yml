@@ -1,0 +1,32 @@
+title: phpup-2026 session.upload_progress Feature Reachable From Internet
+id: 9c4e6b31-2d8f-4a71-9e5c-7b1d3f6a8c2e
+status: stable
+description: |
+  Baseline precondition for CVE-2026-109618 / CVE-2026-109619: a client sent
+  PHP_SESSION_UPLOAD_PROGRESS alongside a PHPSESSID cookie in a multipart
+  POST, meaning session.upload_progress is enabled and reachable. This is
+  also exactly how the legitimate progress-bar feature is used, so it is an
+  inventory/policy signal (who still exposes this surface) and a
+  prerequisite filter for the higher-confidence rules below, not an attack
+  signal on its own.
+references:
+  - https://github.com/rjmendez/phpup-2026
+tags:
+  - attack.t1190
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: webserver
+detection:
+  selection_method:
+    cs-method: 'POST'
+  selection_ct:
+    cs-headers|contains: 'multipart/form-data'
+  selection_cookie:
+    cs-cookie|contains: 'PHPSESSID='
+  selection_field:
+    cs-bytes|contains: 'PHP_SESSION_UPLOAD_PROGRESS'
+  condition: all of selection_*
+falsepositives:
+  - legitimate use of the upload-progress-bar feature
+level: informational

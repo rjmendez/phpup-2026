@@ -1,12 +1,18 @@
-title: phpup-2026 Session Upload Progress Exploit Pattern
+title: phpup-2026 Oversized session.upload_progress Multipart Body (Spray Heuristic)
 id: 7d9e1b23-4f6a-4c8d-9a2e-5b1f3d7e9c0a
-status: experimental
+status: stable
 description: |
-  PHPSESSID cookie + PHP_SESSION_UPLOAD_PROGRESS field in a multipart POST.
-  Both CVEs require both fields. Tune on Content-Length to reduce fp from
-  legitimate progress-tracked uploads.
+  PHPSESSID cookie + PHP_SESSION_UPLOAD_PROGRESS field in a multipart POST,
+  combined with a body far larger than a progress-tracked upload's own form
+  fields need to be. Both CVE-2026-109618 and CVE-2026-109619 require
+  reclaiming freed arData with a heap spray, which needs many >=288-byte
+  blobs — legitimate upload_progress usage does not produce bodies this
+  size from form fields alone. Threshold (40000) is a generic spray-size
+  heuristic, not tied to any one released tool's field count; tune to this
+  deployment's normal non-file form overhead if the web server log
+  includes the uploaded file's own bytes in cs-bytes.
 references:
-  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+  - https://github.com/rjmendez/phpup-2026
 tags:
   - attack.t1190
   - cve.2026.109618
@@ -20,9 +26,13 @@ detection:
     cs-headers|contains: 'multipart/form-data'
   selection_cookie:
     cs-cookie|contains: 'PHPSESSID='
-  selection_body:
-    cs-bytes|gte: 10000
+  selection_field:
+    cs-bytes|contains: 'PHP_SESSION_UPLOAD_PROGRESS'
+  selection_size:
+    cs-bytes|gte: 40000
   condition: all of selection_*
 falsepositives:
-  - legitimate file uploads using session.upload_progress — filter on Content-Length
+  - legitimate file uploads using session.upload_progress with a large file,
+    on a web server that logs the raw body size including the file itself —
+    tune the threshold or exclude by endpoint/Content-Type if so
 level: high

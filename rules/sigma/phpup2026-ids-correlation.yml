@@ -1,0 +1,30 @@
+title: phpup-2026 IDS Alert for session.upload_progress Exploitation
+id: 6a2f8d14-5b9e-4c3a-8f1d-2e7b4a6c9d0f
+status: stable
+description: |
+  Maps to the generic (non-PoC-literal) Suricata rules in rules/suricata.rules
+  — spray-sized body (9109628), dangerous-function marker (9109629), forged
+  zend_fcall_info/zval structural match (9109630), and the hostbit-correlated
+  outbound connection from a marked server (9109632). Alert signature_ids are
+  defined by this repo's suricata.rules and must match the deployed ruleset.
+references:
+  - https://github.com/rjmendez/phpup-2026
+tags:
+  - attack.t1190
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: ids
+  product: suricata
+detection:
+  selection:
+    alert.signature_id:
+      - 9109628
+      - 9109629
+      - 9109630
+      - 9109632
+  condition: selection
+falsepositives:
+  - 9109628 alone (spray-sized body) can fire on unusually large legitimate
+    uploads; weight 9109629/9109630 (payload content) higher
+level: high

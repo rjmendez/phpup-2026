@@ -1,77 +1,104 @@
 # phpup-2026 — Suricata rules
 # CVE-2026-109618 / CVE-2026-109619 · PHP session.upload_progress UAF · RCE
-# SID range 9109618–9109626
+#
+# Detection is keyed on the vulnerability mechanics (required feature fields,
+# the forged zend_fcall_info / zval byte layout PHP's ABI dictates, and the
+# spray geometry needed to reclaim freed arData), NOT on any single exploit
+# tool's hardcoded boundary string, User-Agent, session ID, or output canary.
+# Those are trivial for an attacker to change; a rewritten PoC or a different
+# tool entirely will not carry them. Treat PoC-literal strings as IOCs for
+# that one released artifact (see iocs.json), not as a detection strategy.
+#
+# SID range 9109627–9109632
 
-# --- exact poc signatures (zero fp, block-safe) ---
+# --- feature-presence / policy (low severity, high recall) ---
 
-# hardcoded boundary from poc0_109618.py and poc1_109619.py
+# Precondition for both CVEs: PHP_SESSION_UPLOAD_PROGRESS field name present
+# alongside a PHPSESSID cookie in a multipart POST. This is also how the
+# legitimate upload-progress-bar feature is used, so this is inventory/policy
+# visibility (who still has session.upload_progress reachable from the
+# internet), not an attack signal by itself.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 poc boundary B7kQpoc61";
+  msg:"PHPUP2026 session.upload_progress feature in use (multipart POST + PHPSESSID)";
   flow:established,to_server;
-  http.header; content:"boundary=B7kQpoc61"; nocase; fast_pattern;
-  classtype:web-application-attack; sid:9109618; rev:1;)
+  http.method; content:"POST";
+  http.header; content:"multipart/form-data"; nocase;
+  http.cookie; content:"PHPSESSID="; nocase;
+  http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
+  classtype:policy-violation; sid:9109627; rev:1;)
 
-# User-Agent set by poc0 deliver_live()
+# --- spray geometry (medium severity) ---
+
+# Exploitation needs an oversized multipart body (many >=288-byte reclaim
+# blobs) to win the freed-arData race, far larger than a normal
+# progress-tracked upload's form fields. Threshold is deliberately generic
+# (not tied to the published PoC's 149-field layout) and should be tuned
+# against this deployment's normal upload sizes.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 ua php2shell-109618";
+  msg:"PHPUP2026 oversized session.upload_progress multipart body (possible heap-spray)";
   flow:established,to_server;
-  http.user_agent; content:"php2shell-109618"; fast_pattern;
-  classtype:web-application-attack; sid:9109619; rev:1;)
+  http.method; content:"POST";
+  http.header; content:"multipart/form-data"; nocase;
+  http.cookie; content:"PHPSESSID="; nocase;
+  http.request_body; content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
+  dsize:>40000;
+  classtype:web-application-attack; sid:9109628; rev:1;)
 
-# User-Agent set by poc1 talk()
+# --- payload content (high confidence) ---
+
+# A dangerous-function string is being delivered inside the upload_progress
+# context at all — generalized past `system` to the common command/code
+# execution sinks an attacker would pivot a forged zend_fcall_info to.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 ua php2shell-109619";
+  msg:"PHPUP2026 dangerous function name in session.upload_progress body";
   flow:established,to_server;
-  http.user_agent; content:"php2shell-109619"; fast_pattern;
-  classtype:web-application-attack; sid:9109620; rev:1;)
+  http.request_body;
+  content:"PHP_SESSION_UPLOAD_PROGRESS"; fast_pattern;
+  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/R";
+  classtype:web-application-attack; sid:9109629; rev:1;)
 
-# default SID from poc0/poc1 main() argparse defaults
+# --- forged zval structural match (highest confidence) ---
+
+# IS_STRING_EX (0x106) and IS_OBJECT_EX (0x308) are zval type-tag constants
+# fixed by PHP's own struct ABI, not by any tool's code — any working exploit
+# for this bug class has to lay out a forged zend_fcall_info with these exact
+# bytes in these relative positions to get zend_call_function to dereference
+# it. Co-occurrence with a dangerous-function marker in the same body is
+# strong structural evidence of exploitation, independent of tool branding.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 default poc sid a1b2c3d4";
-  flow:established,to_server;
-  http.cookie; content:"PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3"; fast_pattern;
-  classtype:web-application-attack; sid:9109621; rev:1;)
-
-# trigger harness SID — poc_trigger.py hardcodes SID = "a" * 32
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 trigger harness sid 32xa";
-  flow:established,to_server;
-  http.cookie; content:"PHPSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; fast_pattern;
-  classtype:web-application-attack; sid:9109622; rev:1;)
-
-# --- payload binary signatures (low fp) ---
-
-# "system\0" in upload-progress POST body — forge() plants it at BIN_OFF=200
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 system\\0 payload in upload-progress body";
+  msg:"PHPUP2026 forged zend_fcall_info/zval markers in session.upload_progress body";
   flow:established,to_server;
   http.request_body;
   content:"PHP_SESSION_UPLOAD_PROGRESS";
-  content:"system|00|"; fast_pattern;
-  classtype:web-application-attack; sid:9109623; rev:1;)
+  content:"|06 01 00 00|"; fast_pattern;    # IS_STRING_EX
+  content:"|08 03 00 00|"; within:400;      # IS_OBJECT_EX
+  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/";
+  classtype:web-application-attack; sid:9109630; rev:1;)
 
-# IS_STRING_EX (0x106) + IS_OBJECT_EX (0x308) + system\0 — forged zend_fcall_info
+# --- post-exploitation (behavioral, low confidence / tuning required) ---
+
+# set a hostbit on the targeted server when the structural match fires, so
+# it can be correlated against that same host's later outbound traffic
+# (hostbits, not flowbits: the exploit request and any C2 callback are two
+# separate flows on the same host, not the same flow)
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
-  msg:"PHPUP2026 forged zval struct markers in body";
+  msg:"PHPUP2026 internal: mark host for post-exploitation correlation";
   flow:established,to_server;
   http.request_body;
-  content:"|06 01 00 00|"; fast_pattern;
-  content:"|08 03 00 00|"; within:400;
-  content:"system|00|";
-  classtype:web-application-attack; sid:9109624; rev:1;)
+  content:"PHP_SESSION_UPLOAD_PROGRESS";
+  content:"|06 01 00 00|"; content:"|08 03 00 00|"; within:400;
+  pcre:"/\x00(system|exec|passthru|shell_exec|popen|proc_open)\x00/";
+  hostbits:set,phpup2026.exploit_attempt,track ip_dst,expire 300;
+  noalert;
+  sid:9109631; rev:1;)
 
-# --- post-exploitation indicators ---
-
-# JACKALPOC canary in response — RCE confirmed; both pocs use this as command output marker
-alert http $HTTP_SERVERS any -> $EXTERNAL_NET any (
-  msg:"PHPUP2026 rce canary JACKALPOC in response";
-  flow:established,to_client;
-  http.response_body; content:"JACKALPOC"; fast_pattern;
-  classtype:web-application-attack; sid:9109625; rev:1;)
-
-# outbound TLS SNI to artifact distribution domain
-alert tls $HTTP_SERVERS any -> any 443 (
-  msg:"PHPUP2026 outbound tls to jackalsyn.com";
-  flow:established,to_server;
-  tls.sni; content:"jackalsyn.com"; fast_pattern;
-  classtype:trojan-activity; sid:9109626; rev:1;)
+# Generic RCE-via-PHP-worker indicator: an outbound connection initiated
+# directly by a marked HTTP server shortly after the structural match above.
+# This is intentionally tool-agnostic (no canary string) and still needs
+# tuning; expect false positives from legitimate outbound calls made by the
+# application itself.
+alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET any (
+  msg:"PHPUP2026 outbound connection from HTTP server following upload_progress exploit signal (tune/correlate)";
+  flow:to_server,established;
+  hostbits:isset,phpup2026.exploit_attempt,track ip_src;
+  classtype:trojan-activity; sid:9109632; rev:1;)
