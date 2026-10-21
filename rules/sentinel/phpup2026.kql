@@ -140,6 +140,14 @@ W3CIISLog
 // multipart POSTs with a crash/success mix from one source is the
 // fingerprint of the offset-derivation-then-exploit sequence, regardless
 // of which tool produced it.
+//
+// 2026-10-21: this crash premise is unvalidated against real behavior.
+// A real PHP 8.3.6 lab given the exact documented precondition (a
+// multi-second stall between multipart file parts) returned a clean 200
+// OK, not a 502/503 — see ANALYSIS.md's mechanism finding and
+// examples/logs/phpup2026-nginx-stall-no-crash.log. Treat this query
+// (and phpup2026-WorkerCrashPattern.yaml, which shares the premise) as
+// unvalidated until revised or caveated.
 W3CIISLog
 | where TimeGenerated > ago(1h)
 | where csMethod == "POST"

@@ -70,6 +70,41 @@ fingerprinting (disk forensics, not network detection). Scope: CVE-2026-109619
 only — see "Official status" above for CVE-2026-109618, which this repo does
 not cover.
 
+## KQL / Sentinel field mappings
+
+`rules/sentinel/phpup2026.kql` and `rules/sentinel/analytics-rules/` use
+Microsoft Sentinel/Log Analytics table column names, which differ
+cosmetically from the W3C field names `rules/sigma/` uses for the same
+underlying data, and from this repo's own real lab capture in
+`examples/`. No live Log Analytics workspace was available to run the
+KQL itself — these mappings are checked by hand against the real
+captured field values, not against a live `W3CIISLog`/`DeviceProcessEvents`
+table.
+
+| KQL column (table) | Sigma field (`rules/sigma/`) | Real value seen in this lab |
+|---|---|---|
+| `csMethod` (`W3CIISLog`) | `cs-method` | `"POST"` |
+| `csHeaders` (`W3CIISLog`) | `cs-headers` | `"multipart/form-data; boundary=..."` |
+| `csCookie` (`W3CIISLog`) | `cs-cookie` | `"PHPSESSID=..."` |
+| `csBytes` (`W3CIISLog`) | `cs-bytes` | `58403` (oversized) / `4220` (benign) — numeric; see the `cs-bytes|contains` bug `scripts/sigma_eval.py` caught and fixed in the sigma rules |
+| `csUriQuery` (`W3CIISLog`) | — (no sigma equivalent) | not populated in this lab — `PHP_SESSION_UPLOAD_PROGRESS` was sent as a multipart body field, not a query string, same as real-world legitimate usage |
+| `InitiatingProcessFileName` (`DeviceProcessEvents`) | `ParentCommandLine` (contains-match on full cmdline, not just the filename) | `php-fpm8.3` / `cron` (both real, see `examples/logs/phpup2026-sysmonlinux-*.log`) |
+| `InitiatingProcessAccountName`/`AccountDomain`/`AccountSid` (`DeviceProcessEvents`) | `User` | `www-data` (real) |
+| `FileName`/`ProcessCommandLine` (`DeviceProcessEvents`) | `CommandLine` | `/bin/sh -c "id; whoami; sleep 1.5"` (real) |
+
+Tables this repo's KQL targets but this lab never produced real data for
+— not locally validated at all, logic-reviewed only: `CommonSecurityLog`,
+`AzureDiagnostics`, `DeviceNetworkEvents`, `SecurityEvent`.
+
+**Known issue, not yet fixed:** query `[T2-4]` in `phpup2026.kql` (and the
+matching `phpup2026-WorkerCrashPattern.yaml` Sentinel Analytics Rule) key
+on a `scStatus in ("200", "502", "503")` worker-crash ratio. That crash
+signal shares the disproven premise in `ANALYSIS.md`'s 2026-10-21
+mechanism finding — this lab's stall test produced a clean `200 OK`, not
+a `502`/`503`, under the exact precondition that was supposed to crash
+the worker. Treat `WorkerCrashPattern` as unvalidated against real
+behavior until it's revised or caveated the same way.
+
 ## Mitigation
 
 ```ini
