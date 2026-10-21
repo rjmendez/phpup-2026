@@ -1,8 +1,10 @@
 id: f95e2044-d214-40f2-9bac-980556d52aee
-name: PHP Session Upload Progress UAF - Worker Crash Pattern (CVE-2026-109618/109619)
+name: PHP Session Upload Progress UAF - Worker Crash Pattern (CVE-2026-109619)
 description: |
-  'Detects the exploitation timing pattern for CVE-2026-109618/109619, a PHP
-  session.upload_progress heap UAF (CVSS 9.2, unauthenticated RCE). An attacker
+  'Detects the exploitation timing pattern for CVE-2026-109619, a PHP
+  session.upload_progress heap UAF (CVSS 9.2, unauthenticated RCE). Not
+  CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
+  official 2026-10-21 advisory. An attacker
   probing or exploiting with an incorrect per-build delta crashes the PHP worker
   (502/503). A correct delta produces RCE (200). This rule surfaces source IPs
   that send multiple large multipart POSTs with PHPSESSID cookies and generate
@@ -26,7 +28,6 @@ tactics:
 relevantTechniques:
   - T1190
 tags:
-  - CVE-2026-109618
   - CVE-2026-109619
   - phpup-2026
 query: |
@@ -65,7 +66,7 @@ entityMappings:
         columnName: HostName
       - identifier: DnsDomain
         columnName: HostNameDomain
-version: 1.0.0
+version: 1.0.1
 kind: Scheduled
 metadata:
     source:

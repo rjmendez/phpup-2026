@@ -1,5 +1,12 @@
 # Hardening guide — CVE-2026-109618 / CVE-2026-109619
 
+> **Scope note (2026-10-21):** per PHP's official advisory, these are two
+> unrelated bugs. Layers 1–6 below (session.upload_progress, spray/RCE
+> chain-breaking, process isolation, detection) address **CVE-2026-109619**
+> only, the bug this repo researched. **CVE-2026-109618** is a separate
+> OOM-corruption issue — its own mitigations are in the "CVE-2026-109618"
+> section below; this repo has no detection rules for it.
+
 Defense-in-depth ordered by impact. Each layer is independent; apply all that fit
 your deployment.
 
@@ -16,7 +23,57 @@ session.upload_progress.enabled = 0
 
 Verify: `php -r "echo ini_get('session.upload_progress.enabled');"`  — must print `0`.
 
-**Patch** to PHP 8.2.35+ / 8.4.5+. PHP 5/6/7 are EOL and will not be patched.
+Per the official advisory, three more CVE-2026-109619 mitigations beyond
+disabling the feature:
+
+```ini
+; PHP 8.5 only — blocks the confirmed fatal-backtrace path
+fatal_error_backtraces = 0
+```
+
+- Remove invalid or deprecated settings applied per request that emit
+  diagnostics before initialization — `error_reporting`, `display_errors`,
+  or `@` do not help, since they hide the diagnostic without closing the gap.
+- Fix attacker-reachable fatal errors and execution timeouts, including
+  failures in callbacks, upload or import processing, and cleanup.
+
+All of the above must be set in `php.ini`, an FPM pool, or server config
+applied *before* request parsing — not via `ini_set()` or FPM `.user.ini`,
+which apply too late. Restart every worker after changing them.
+
+**Patch** to PHP 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 (released 2026-10-21) —
+fixes CVE-2026-109619. PHP 5/6/7 are EOL and will not be patched; PHP 8.1 and
+older get no fix from the PHP project.
+
+---
+
+## CVE-2026-109618 — OOM corruption (separate bug, not covered by Layers 1–6 or by `rules/`)
+
+Unrelated to `session.upload_progress`. Per the official advisory: out-of-memory
+handling can interrupt PHP while internal request data is only partially
+initialized; request cleanup may then treat the invalid data as valid. This
+repo has not researched the trigger path and has no detection rules for it —
+these are the official advisory's interim mitigations only.
+
+```ini
+; Lock the memory limit so no pool/app override reintroduces a finite limit
+; that can fail mid-request. Set via php_admin_value, not php_value.
+memory_limit = -1
+
+; Keep decoded request bodies small enough that hitting this path is rare.
+post_max_size = 8M        ; 32M if the app needs file uploads
+upload_max_filesize = 8M  ; must stay below post_max_size
+```
+
+- Enforce limits at the web server/proxy level too: decoded request size,
+  input field count, multipart part count, header count, and nesting depth —
+  including requests with no usable `Content-Length`.
+- Use a container/cgroup memory limit as an availability boundary, with a
+  policy that kills only the affected worker. **Do not** use `RLIMIT_AS` or
+  `RLIMIT_DATA` instead — those can themselves cause the vulnerable
+  allocation failure.
+
+None of this makes an installation safe; only patching does.
 
 ---
 
@@ -212,6 +269,9 @@ Detections are in `rules/`:
 | Sigma | `rules/sigma/` | 6 rules including process spawn and upload pattern |
 | Sentinel KQL | `rules/sentinel/phpup2026.kql` | 12 queries for W3CIISLog, DeviceProcessEvents, AzureDiagnostics |
 
+All of the above cover CVE-2026-109619 only; see the CVE-2026-109618 section
+above for that bug's mitigations (no rules exist for it here).
+
 Additional monitoring worth enabling:
 
 ```bash
@@ -232,9 +292,10 @@ inotifywait -m /var/lib/php/sessions -e create | \
 
 ## Quick-check priority order
 
-1. **Patch PHP** — scheduled today (8.2.35+ / 8.4.5+)
-2. `session.upload_progress.enabled = 0`
-3. `disable_functions` includes `system,exec,shell_exec,passthru,popen`
-4. Dedicated process user + `seccomp`/AppArmor `execve` block
-5. Egress filter from web server process
-6. Load Suricata rules on edge
+1. **Patch PHP** — released 2026-10-21 (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35), fixes both CVEs
+2. `session.upload_progress.enabled = 0` (CVE-2026-109619)
+3. `memory_limit = -1` (admin-locked) + tight `post_max_size`/`upload_max_filesize` (CVE-2026-109618)
+4. `disable_functions` includes `system,exec,shell_exec,passthru,popen`
+5. Dedicated process user + `seccomp`/AppArmor `execve` block
+6. Egress filter from web server process
+7. Load Suricata rules on edge (CVE-2026-109619 coverage only)

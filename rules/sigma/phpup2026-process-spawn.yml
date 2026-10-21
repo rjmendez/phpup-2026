@@ -10,7 +10,6 @@ references:
 tags:
   - attack.execution
   - attack.t1059.004
-  - cve.2026.109618
   - cve.2026.109619
 logsource:
   category: process_creation

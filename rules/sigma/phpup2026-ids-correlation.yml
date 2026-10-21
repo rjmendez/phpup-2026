@@ -11,7 +11,6 @@ references:
   - https://github.com/rjmendez/phpup-2026
 tags:
   - attack.t1190
-  - cve.2026.109618
   - cve.2026.109619
 logsource:
   category: ids

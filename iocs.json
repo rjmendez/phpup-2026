@@ -1,6 +1,8 @@
 {
   "meta": {
-    "cves": ["CVE-2026-109618", "CVE-2026-109619"],
+    "cves": ["CVE-2026-109619"],
+    "unrelated_cve": "CVE-2026-109618 (\"RCE via OOM corruption\" per PHP's official 2026-10-21 advisory) is a separate bug, unrelated to session.upload_progress. Not covered by this file.",
+    "advisory": "https://www.php.net/archive/2026.php#2026-10-21-5",
     "cvss_v4": 9.2,
     "affected": "PHP 8.x < 2026-10-21",
     "updated": "2026-10-21",
@@ -8,13 +10,14 @@
   },
 
   "vulnerability": {
+    "cve": "CVE-2026-109619",
     "required_fields": ["PHP_SESSION_UPLOAD_PROGRESS", "PHPSESSID"],
     "trigger_paths": [
-      "FILE_DATA stall >= session.upload_progress.min_freq (default 1.0s) — the only confirmed independently-exploitable path (CVE-2026-109618/109619)"
+      "FILE_DATA stall >= session.upload_progress.min_freq (default 1.0s) — the only confirmed independently-exploitable path (CVE-2026-109619)"
     ],
     "not_a_trigger_path": "MULTIPART_EVENT_END with rfc1867_cleanup=0 and refcount>1 (SEPARATE_ARRAY COW) — ruled out: the stale post_bytes_processed write lands on the old array while it is still live; php_session_initialize() frees it only afterward, and the pointer is never dereferenced again. Logic/correctness bug, not a third exploitable primitive.",
     "mitigation": "session.upload_progress.enabled = 0",
-    "patched": "PHP 8.2.35+ / 8.4.5+"
+    "patched": "PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (all released 2026-10-21)"
   },
 
   "spray_geometry": {

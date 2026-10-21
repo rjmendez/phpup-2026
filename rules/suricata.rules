@@ -1,5 +1,7 @@
 # phpup-2026 — Suricata rules
-# CVE-2026-109618 / CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+# CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+# (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
+# official 2026-10-21 advisory; see README.md "Official status")
 #
 # Detection is keyed on the vulnerability mechanics (required feature fields,
 # the forged zend_fcall_info / zval byte layout PHP's ABI dictates, and the
@@ -13,7 +15,7 @@
 
 # --- feature-presence / policy (low severity, high recall) ---
 
-# Precondition for both CVEs: PHP_SESSION_UPLOAD_PROGRESS field name present
+# Precondition for CVE-2026-109619: PHP_SESSION_UPLOAD_PROGRESS field name present
 # alongside a PHPSESSID cookie in a multipart POST. This is also how the
 # legitimate upload-progress-bar feature is used, so this is inventory/policy
 # visibility (who still has session.upload_progress reachable from the

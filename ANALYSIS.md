@@ -1,6 +1,21 @@
-# PHP session.upload_progress UAF — CVE-2026-109618 / CVE-2026-109619
+# PHP session.upload_progress UAF — CVE-2026-109619
 
 **CVSS v4.0 9.2 · unauth · default config · PHP 8.x pre-2026-10-21**
+
+> **2026-10-21 correction.** PHP's official advisory (published today, see
+> `README.md`) splits this bug class into two CVEs with *different root
+> causes*: **CVE-2026-109619** ("RCE via stale global state") and
+> **CVE-2026-109618** ("RCE via OOM corruption" — out-of-memory handling
+> interrupting partially-initialized request data, unrelated to
+> `session.upload_progress`). Everything below — including what an earlier
+> version of this document labeled "CVE-2026-109618" — is the
+> `php_session_rfc1867_progress` stale-pointer mechanism and maps to
+> **CVE-2026-109619 only**. CVE-2026-109618 is a separate bug this repo has
+> not analyzed; it has no coverage in `rules/` or `iocs.json`. See
+> `HARDENING.md` for its own (different) mitigations.
+
+Fixed in PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (all released 2026-10-21) —
+[official advisory](https://www.php.net/archive/2026.php#2026-10-21-5).
 
 ---
 
@@ -28,15 +43,22 @@ and 3356 land in freed memory.
 
 ---
 
-## Two CVEs, two delivery paths
+## One CVE, two delivery paths
 
-**CVE-2026-109619** — `post_bytes_processed` (session.c:3356)
+Both paths below are CVE-2026-109619 — they share the same root cause (a
+cached raw `zval*` dangling after `php_session_initialize()` frees the
+HashTable it points into) and differ only in which pointer and which chunk
+sequence triggers it. An earlier revision of this document attributed the
+second path to "CVE-2026-109618"; that was a misattribution — see the
+correction note at the top of this file.
+
+**Path A** — `post_bytes_processed` (session.c:3356)
 
 Armed once at the first `MULTIPART_EVENT_FILE_START`, never refreshed on later
 `FILE_START` events. Two-file delivery: file 1 triggers `update#1`; stall >1 s;
 file 2 `FILE_DATA` triggers `update#2` (free), then stale `Z_LVAL_P` write.
 
-**CVE-2026-109618** — `current_file_bytes_processed` (session.c:3355)
+**Path B** — `current_file_bytes_processed` (session.c:3355)
 
 Re-armed at every `FILE_START`, but `current_file` is immediately moved into
 `files[]` via `add_next_index_zval` (`ZVAL_COPY_VALUE`, no addref) — leaving the
@@ -137,8 +159,10 @@ CVE-2020-7062 — NULL dereference in the same `MULTIPART_EVENT_END` /
 `cleanup=0` handler, fixed by adding the `Z_ISUNDEF(progress->data)` guard
 still present today. The raw pointer caching was not addressed.
 
-Patch ETA: 2026-10-21 14:00 UTC (PHP 8.2.35+, 8.4.5+). EOL branches receive
-no fix.
+Patched 2026-10-21: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 —
+[advisory](https://www.php.net/archive/2026.php#2026-10-21-5). PHP 8.1 and
+older receive no fix from the PHP project (some distros/LTS vendors
+backport — check with your vendor). PHP 5/6/7 are long EOL.
 
 ---
 
@@ -152,6 +176,9 @@ structural match: @+16: 06 01 00 00 (IS_STRING_EX)  @+160: 08 03 00 00 (IS_OBJEC
 ```
 
 Rules: `rules/suricata.rules`, `rules/yara.yar`, `rules/sigma/`, `rules/sentinel/`.
+Scope: CVE-2026-109619 only. CVE-2026-109618 ("RCE via OOM corruption" per
+the official advisory) is a separate, unanalyzed bug with no detection
+coverage here.
 
 PoC literals (`B7kQpoc61*`, `php2shell-*`, `a1b2c3d4e5f6a7b8c9d0e1f2a3`, `JACKALPOC`) → `this_artifact_only` in `iocs.json`.
 
@@ -163,7 +190,10 @@ PoC literals (`B7kQpoc61*`, `php2shell-*`, `a1b2c3d4e5f6a7b8c9d0e1f2a3`, `JACKAL
 session.upload_progress.enabled = 0
 ```
 
-Patch to 8.2.35+ / 8.4.5+. PHP 5/6/7 are permanently exposed.
+Patched: PHP 8.5.12, 8.4.27, 8.3.36, 8.2.35 (2026-10-21). PHP 5/6/7 are
+permanently exposed. This mitigation and these patch versions address
+CVE-2026-109619 only — see `HARDENING.md` for CVE-2026-109618's unrelated
+OOM-corruption mitigations.
 
 ---
 

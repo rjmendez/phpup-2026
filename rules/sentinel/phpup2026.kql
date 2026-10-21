@@ -1,5 +1,7 @@
 // phpup-2026 — Microsoft Sentinel KQL Detection Queries
-// CVE-2026-109618 / CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+// CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+// (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
+// official 2026-10-21 advisory; see README.md "Official status")
 //
 // Table coverage:
 //   W3CIISLog              IIS web server logs
@@ -27,7 +29,7 @@
 // ── TIER 1: GENERIC / MECHANICS-BASED ────────────────────────────────────────
 
 // [T1-1] session.upload_progress feature reachable and in use — IIS
-// Baseline precondition for both CVEs. Also how the legitimate progress-bar
+// Baseline precondition for CVE-2026-109619. Also how the legitimate progress-bar
 // feature is used — inventory/policy signal, not an attack signal alone.
 W3CIISLog
 | where TimeGenerated > ago(1h)
