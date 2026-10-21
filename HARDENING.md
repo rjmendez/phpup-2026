@@ -16,11 +16,7 @@ session.upload_progress.enabled = 0
 
 Verify: `php -r "echo ini_get('session.upload_progress.enabled');"`  — must print `0`.
 
-If your application needs upload progress, implement it in application logic (polling
-a server-side counter) rather than relying on PHP's built-in tracker.
-
-**Patch** to PHP 8.2.35+ / 8.4.5+ when available (2026-10-21 14:00 UTC).
-PHP 5/6/7 are EOL and will not be patched — treat them as permanently exposed.
+**Patch** to PHP 8.2.35+ / 8.4.5+. PHP 5/6/7 are EOL and will not be patched.
 
 ---
 
@@ -35,9 +31,7 @@ disable_functions = system,exec,shell_exec,passthru,popen,proc_open,
                     posix_setgid,pcntl_signal
 ```
 
-Note: `disable_functions` is a php.ini-level setting — it cannot be overridden
-by `.htaccess` or `ini_set()`. Set it in the server php.ini or php-fpm pool
-`php_admin_value`.
+Note: `disable_functions` is php.ini-only — cannot be overridden by `.htaccess` or `ini_set()`. Set in php.ini or the fpm pool's `php_admin_value`.
 
 **Custom session save handlers increase exploitability.** With `session_set_save_handler()` or `session.save_handler=user`,
 arbitrary PHP executes inside `php_session_initialize()`, making the UAF stall
@@ -51,9 +45,7 @@ window more reliable. If you use Redis/Memcached sessions:
 
 ## Layer 3 — Process isolation (limit post-RCE impact)
 
-Contain what a successful RCE can do.
-
-### php-fpm pool hardening (`/etc/php/8.x/fpm/pool.d/www.conf`)
+### php-fpm pool hardening
 
 ```ini
 ; Dedicated low-privilege user — not shared www-data
@@ -104,9 +96,6 @@ ReadWritePaths   = /var/lib/php/sessions /tmp /srv/php-app/uploads
 ProtectHome      = yes
 CapabilityBoundingSet =
 ```
-
-Blocking `execve` systemd-level means even if `system()` is called, the kernel
-rejects the child process spawn.
 
 ### LiteSpeed / lsphp
 
@@ -183,10 +172,7 @@ SecRule REQUEST_BODY "@contains PHP_SESSION_UPLOAD_PROGRESS" \
     "id:1000001,phase:2,deny,status:403,msg:'phpup-2026 upload-progress trigger'"
 ```
 
-### Egress filtering (post-RCE callback prevention)
-
-PHP workers have no reason to open outbound TCP connections except to your own
-database/cache. Block everything else.
+### Egress filtering
 
 ```bash
 # iptables — drop outbound from php-app user except to known services
@@ -202,9 +188,6 @@ block out quick on egress inet from <webserver_host> to ! <trusted_destinations>
 ---
 
 ## Layer 5 — Session hardening
-
-These don't prevent the UAF but limit the attack surface and post-RCE session
-abuse.
 
 ```ini
 session.cookie_httponly   = 1    ; blocks JS from reading PHPSESSID

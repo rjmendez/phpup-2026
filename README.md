@@ -30,17 +30,12 @@ SHA256: `0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63`
 
 ## Detection philosophy
 
-Suricata and Sigma rules key on the vulnerability's actual mechanics — the
-required `PHP_SESSION_UPLOAD_PROGRESS`+`PHPSESSID` combination, spray-sized
-bodies, dangerous-function markers, and the forged `zend_fcall_info`/zval
-byte layout PHP's own struct ABI dictates — not on one released tool's
-hardcoded multipart boundary, User-Agent, session ID, or output canary.
-Those are trivial to change and will not survive a rewritten exploit. The
-one released PoC's literal strings are kept as blocklist-grade IOCs under
-`this_artifact_only` in `iocs.json`, not presented as the detection
-strategy. YARA remains PoC-source/binary fingerprinting by design — that's
-a different use case (identifying the tool on disk) from network detection
-of the attack.
+Rules key on mechanics — `PHP_SESSION_UPLOAD_PROGRESS`+`PHPSESSID`,
+spray-sized bodies, dangerous-function markers, and the forged
+`zend_fcall_info`/zval byte layout PHP's ABI dictates — not on any one
+tool's hardcoded boundary, User-Agent, session ID, or canary. PoC literal
+strings are in `this_artifact_only` in `iocs.json`. YARA is PoC/source
+fingerprinting (disk forensics, not network detection).
 
 ## Mitigation
 
