@@ -1,0 +1,7 @@
+#Software: Microsoft Internet Information Services 10.0
+#Version: 1.0
+#Date: 2026-10-20 14:28:03
+#Fields: date time s-ip cs-method cs-uri-stem cs-uri-query s-port cs-username c-ip cs(User-Agent) cs(Cookie) cs(Content-Type) sc-status sc-substatus sc-win32-status sc-bytes cs-bytes time-taken
+2026-10-20 14:28:03 192.0.2.10 POST /cart/upload.php - 443 - 203.0.113.42 curl/8.4.0 PHPSESSID=3f9a0c7e2b1d4f6a8e0c2b4d6f8a0c2e multipart/form-data;_boundary=----WebKitFormBoundaryPhpUp2026x 502 3 64 342 48213 812
+2026-10-20 14:30:51 192.0.2.10 POST /cart/upload.php - 443 - 203.0.113.42 curl/8.4.0 PHPSESSID=7b2e4f0a9c1d3e5f7a9c1b3d5f7a9c1e multipart/form-data;_boundary=----WebKitFormBoundaryPhpUp2026y 502 3 64 342 48227 796
+2026-10-20 14:33:19 192.0.2.10 POST /cart/upload.php - 443 - 203.0.113.42 curl/8.4.0 PHPSESSID=a1c3e5f7b9d1f3a5c7e9b1d3f5a7c9e1 multipart/form-data;_boundary=----WebKitFormBoundaryPhpUp2026z 502 3 64 342 48301 803
