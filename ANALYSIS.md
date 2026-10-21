@@ -108,6 +108,40 @@ diff confirms it was real and has been closed:
   create file-metadata arrays; nested field names multiply that cost
   further.
 
+**Reproduced, measured (2026-10-21), own lab.** A pre-patch PHP 8.3.6
+build (Ubuntu package `8.3.6-0ubuntu0.24.04.12` - note the *installed
+default* `8.3.6-0ubuntu0.24.04.13` already had this fix backported
+despite the unchanged upstream version string; confirmed via the
+`zend_new_array_singleton` symbol's presence/absence in
+`/usr/sbin/php-fpm8.3`, had to explicitly downgrade), `pm=static`,
+`pm.max_children=1`. One multipart POST, one part, 1,400,000 duplicate
+5-byte header lines (`A:0\r\n`), 7,000,111 bytes wire size:
+
+| | `memory_get_peak_usage(true)` |
+|---|---|
+| Baseline (benign upload, fresh worker) | 2 MB |
+| Same payload, **patched** build (`.13`) | 2 MB - identical to baseline |
+| Same payload, **pre-patch** build (`.12`) | **408 MB** |
+
+**~58x the 7MB wire payload, ~204x the 2MB baseline** - measured via
+PHP's own internal accounting (the exact metric `memory_limit`
+enforcement checks against), not an external RSS proxy (an initial RSS-
+sampling attempt was flat/misleading: zend_mm arena growth doesn't
+necessarily move process RSS the way live-data growth does). Sweeping
+`memory_limit` from 2M-256M against the pre-patch build consistently
+produced a **hard worker crash and respawn** (`502 Bad Gateway`,
+php-fpm log: `child <pid> exited with code 70` then a new child PID
+immediately) - not a silent survive-with-corruption. 512M+: clean
+`200 OK`, same worker PID before/after. See `examples/pcaps/`
+`phpup2026-real-oom-amplification.pcap` and the paired log files for
+the full capture (crash / survives / benign-control, three requests).
+
+This confirms CVE-2026-109618's amplification vector and resulting
+DoS convincingly. It does **not** by itself demonstrate CVE-2026-109619's
+cross-request consumer mechanism, which needs the producer's worker to
+*survive* with dangling globals - this trigger, at this scale, kills
+the worker outright instead. See "What we have NOT reproduced" below.
+
 ## The heap-spray/reclaim step - real, differently triggered
 
 Separate from *how* the bug is triggered, the fix also hardens *how the
@@ -128,17 +162,22 @@ that request's own initialization has run.
 
 ## What we have NOT reproduced
 
-- An end-to-end RCE, or even a confirmed crash/ASAN use-after-free,
-  under the real trigger (header-explosion OOM on a producer request,
-  followed by an `upload_progress` or early-error-path consumer request
-  on the same worker).
+- **A surviving, corrupted worker.** The header-explosion OOM trigger
+  reproduced above hard-crashes the worker (process exit + respawn) at
+  every `memory_limit` tested below the 408MB peak; it does not leave a
+  survivor with dangling globals the way CVE-2026-109619's consumer step
+  needs. The advisory's "strongest demonstrated case" is PHP 8.5 with
+  `fatal_error_backtraces` enabled, a different producer path not tied to
+  this OOM trigger at all - untested as of this writing (in progress:
+  building PHP 8.5.0, genuinely pre-patch, from source, since both the
+  `ondrej/php` PPA and `packages.sury.org` only distribute the already-
+  patched 8.5.12).
+- An end-to-end RCE, or even a confirmed ASAN use-after-free, under
+  whichever producer trigger does leave a surviving worker.
 - Which early-init paths beyond `php_session_rfc1867_callback` and
   `zend_error_zstr_at` are reachable in a default configuration.
 
-Needs a debug/ASAN PHP build and a pinned (`pm=static`, small pool)
-php-fpm/mod_php lab, forcing worker reuse so a producer and consumer
-request are guaranteed to land on the same process. Tracked as open
-follow-up work, not claimed as done.
+Tracked as open follow-up work, not claimed as done.
 
 ## Patch
 

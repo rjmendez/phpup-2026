@@ -28,8 +28,23 @@
     "note": "Separate from the trigger: the fix also hardens how freed memory gets reclaimed. main/php_variables.c now builds $_POST/$_GET/$_COOKIE via a new array_init_singleton() (Zend/zend_hash.c's zend_new_array_singleton(), nTableSize forced to 1) instead of the default dynamically-sized array_init(). This confirms a heap-spray/reclaim step is a real part of exploitation -- it is just reached via the cross-request mechanism above, not a same-request spray at fixed byte offsets. No specific blob layout or offset table is confirmed for the real mechanism; the ones in the prior revision of this file were artifact-specific claims that do not match the fix."
   },
 
+  "reproduced_2026_10_21": {
+    "note": "Own lab, pre-patch PHP 8.3.6 (Ubuntu 8.3.6-0ubuntu0.24.04.12 -- the distro's default .13 build already had the fix backported despite the unchanged version string; confirmed via zend_new_array_singleton symbol presence/absence). One multipart part, 1,400,000 duplicate 5-byte header lines, 7,000,111 bytes wire.",
+    "peak_memory_bytes": {
+      "baseline_benign_upload": 2097152,
+      "same_payload_patched_build": 2097152,
+      "same_payload_prepatch_build": 427819008
+    },
+    "amplification_vs_wire_bytes": "~58x",
+    "amplification_vs_baseline": "~204x",
+    "measured_via": "PHP's own memory_get_peak_usage(true) -- the metric memory_limit enforcement checks against, not an external RSS proxy (RSS sampling was flat/misleading in an earlier attempt)",
+    "memory_limit_sweep": "2M/4M/8M/16M/32M/64M/128M/256M -> hard worker crash + respawn (502, php-fpm log 'exited with code 70', new child PID). 512M/1024M -> clean 200, same worker PID before/after.",
+    "gap": "Crash-and-respawn at low memory_limit is NOT the survive-with-corrupted-state CVE-2026-109619 needs. See unreproduced section.",
+    "artifacts": "examples/pcaps/phpup2026-real-oom-amplification.pcap + paired logs (examples/logs/phpup2026-real-oom-amplification-*.log)"
+  },
+
   "unreproduced": {
-    "note": "Not yet confirmed by this repo: an end-to-end RCE or even a reproduced crash/ASAN use-after-free under the real trigger (header-explosion OOM producer + upload_progress or early-error-path consumer on the same worker). Needs a debug/ASAN PHP build and a pinned (pm=static, small pool) lab forcing worker reuse. See ANALYSIS.md."
+    "note": "An end-to-end RCE, or even a confirmed ASAN use-after-free, under whichever producer trigger leaves a surviving (not crashed) worker. The header-explosion OOM trigger reproduced above (see reproduced_2026_10_21) hard-crashes the worker instead of surviving with corrupted state -- it demonstrates CVE-2026-109618 convincingly but not CVE-2026-109619's cross-request consumer step. The advisory's strongest demonstrated case for that is PHP 8.5 + fatal_error_backtraces, a different producer path, untested here as of this writing. Also unconfirmed: which early-init paths beyond php_session_rfc1867_callback and zend_error_zstr_at are reachable in a default configuration. See ANALYSIS.md."
   },
 
   "this_artifact_only": {

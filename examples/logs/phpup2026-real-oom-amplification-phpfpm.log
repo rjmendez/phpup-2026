@@ -1,0 +1,15 @@
+[21-Oct-2026 15:13:04] NOTICE: fpm is running, pid 1758600
+[21-Oct-2026 15:13:04] NOTICE: ready to handle connections
+[21-Oct-2026 15:13:04] NOTICE: systemd monitor interval set to 10000ms
+[21-Oct-2026 15:14:01] NOTICE: Terminating ...
+[21-Oct-2026 15:14:01] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:14:01] NOTICE: fpm is running, pid 1759539
+[21-Oct-2026 15:14:01] NOTICE: ready to handle connections
+[21-Oct-2026 15:14:01] NOTICE: systemd monitor interval set to 10000ms
+[21-Oct-2026 15:14:03] WARNING: [pool www] child 1759540 exited with code 70 after 2.467784 seconds from start
+[21-Oct-2026 15:14:03] NOTICE: [pool www] child 1759594 started
+[21-Oct-2026 15:14:04] NOTICE: Terminating ...
+[21-Oct-2026 15:14:04] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:14:04] NOTICE: fpm is running, pid 1759618
+[21-Oct-2026 15:14:04] NOTICE: ready to handle connections
+[21-Oct-2026 15:14:04] NOTICE: systemd monitor interval set to 10000ms
