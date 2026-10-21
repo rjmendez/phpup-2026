@@ -190,9 +190,60 @@ source to test the advisory's "strongest demonstrated case":
   explain why the advisory names **mod_php** (embedded in each Apache
   child/thread, no equivalent per-request process recycling) as where
   RCE was confirmed, rather than php-fpm.
-- Consequently: reproducing CVE-2026-109619's actual survive-with-
-  corruption consumer step likely needs an **Apache + mod_php** lab,
-  not php-fpm - untested here. Not yet built; would be further work.
+- **2026-10-21, built the Apache + mod_php lab and tested the
+  hypothesis directly.** Genuinely pre-patch build confirmed the same
+  way as the php-fpm builds: `libapache2-mod-php8.3=8.3.6-0maysync1`,
+  `zend_new_array_singleton` absent from
+  `/usr/lib/apache2/modules/libphp8.3.so`. First pass used a
+  deliberately minimal prefork pool (`MaxRequestWorkers 1`) to make
+  "which process handled this request" trivial to track by PID - this
+  was a methodology mistake: that config makes Apache's own
+  spare-server housekeeping churn the single permitted worker on
+  *every* request, benign or not (confirmed: PIDs differed after
+  purely benign follow-up requests too, with no error logged at all),
+  so an apparent "respawn" there is not evidence of anything. Corrected
+  by reverting to Apache's stock prefork pool (`StartServers 5`,
+  `MinSpareServers 5`, `MaxSpareServers 10`, `MaxRequestWorkers 150`)
+  and reading `getmypid()` out of each response body instead of
+  diffing `ps` snapshots, so the specific worker that hit the OOM
+  condition can be identified and followed regardless of which of the
+  pool's idle workers round-robins to serve any given connection.
+- **Result: the same header-explosion payload, at `memory_limit=256M`
+  (the exact value that produces php-fpm's "exited with code 70,
+  child <new-pid> started" crash+respawn on both 8.3 and 8.5), does
+  NOT kill the Apache worker.** Confirmed worker PID 1981633 both
+  produced the `PHP Fatal error: Allowed memory size of 268435456
+  bytes exhausted` log line for the crash request *and* went on to
+  successfully answer a later benign request in the same pool's
+  round-robin rotation - the complete set of worker PIDs (5, matching
+  pool size) was identical before and after the crash request, with no
+  new PID ever appearing and none disappearing. This directly confirms
+  the original hypothesis: **Apache's mod_php does not recycle a
+  worker on this condition the way php-fpm's process supervisor does**,
+  so the cross-request window CVE-2026-109619 needs is structurally
+  open here in a way it is not on php-fpm.
+- **Important caveat, not yet resolved**: the PHP-level error text in
+  this mod_php test was the *ordinary*, long-recoverable "Allowed
+  memory size of N bytes exhausted (tried to allocate 4096 bytes)"
+  message - the routine incremental `memory_limit` check, not the
+  distinct "Out of memory (allocated N) (tried to allocate N bytes)"
+  message that identifies the actual `zend_mm_safe_error`/bailout
+  branch this CVE pair is about. This was true at every tested
+  `memory_limit` from 2M to 1024M under mod_php, with no exception.
+  The paired php-fpm log (`examples/logs/
+  phpup2026-real-oom-amplification-phpfpm.log`) only records FPM's own
+  process-supervisor message ("exited with code 70"), not PHP's
+  internal error text, so there is no direct side-by-side confirmation
+  that the php-fpm crash and this mod_php survival are hitting the
+  identical internal code path rather than merely the same outward
+  `memory_limit` value. It remains possible mod_php's worker "survives"
+  here because this specific test never reaches the actual vulnerable
+  bailout branch at all under mod_php's allocation pattern, rather than
+  because it reaches that branch and recovers from it. Confirming or
+  ruling this out needs either an ASAN/debug PHP build (to catch the
+  bailout at the source level directly) or a producer trigger that is
+  independently known to force the large/chunk allocation path
+  `zend_mm_safe_error` specifically handles.
 - Also still unconfirmed: an end-to-end RCE or ASAN use-after-free under
   whichever producer trigger does leave a surviving worker, and which
   early-init paths beyond `php_session_rfc1867_callback` and
@@ -201,7 +252,10 @@ source to test the advisory's "strongest demonstrated case":
 See `examples/pcaps/phpup2026-real-fpm-worker-recycle-85.pcap` and the
 paired `php-fpm.log` (both PHP versions' "exited with code 70, child
 <new-pid> started" pattern, logged back to back across a `memory_limit`
-sweep). Tracked as open follow-up work, not claimed as done.
+sweep). The Apache/mod_php worker-survival test above has no matching
+pcap artifact yet (it was run to resolve the survive-vs-crash question,
+not to produce a shippable detection example) - tracked as open
+follow-up work if one is wanted, not claimed as done.
 
 ## Patch
 
