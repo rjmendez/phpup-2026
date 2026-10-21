@@ -68,8 +68,8 @@ confirmed trigger/consumer path, not by separate code. `ANALYSIS.md`,
 | `rules/suricata.rules` | Suricata 7+ - OOM-amplification + feature-presence signals (SID 9109627, 9109633, 9109635 active; 9109628-9109632, 9109634, 9109636 retired - see the file's own retired-rules section) |
 | `rules/yara.yar` | YARA 4+ - tool/source fingerprint (intentionally PoC-specific; file/memory forensics use case, not network detection) |
 | `rules/sigma/` | Sigma (one rule per file) |
-| `rules/sentinel/phpup2026.kql` | Microsoft Sentinel KQL |
-| `rules/sentinel/analytics-rules/` | Sentinel Analytics Rule YAML (one rule per file) |
+| `rules/sentinel/phpup2026.kql` | Microsoft Sentinel KQL - feature-presence + process-spawn only; the OOM-amplification queries this file once had were retired 2026-10-21 (built on an AzureDiagnostics field, `requestBody_s`, that does not exist - see the file's own header comment) |
+| `rules/sentinel/analytics-rules/` | Sentinel Analytics Rule YAML (one rule per file) - same retirement applies, only the process-spawn rule remains |
 | `ANALYSIS.md` | technical writeup: the real fix-commit mechanism, codebase survey, what's unreproduced |
 | `HARDENING.md` | defense-in-depth hardening guide, layered beyond the primary mitigation |
 | `examples/` | sanitized pcap/http/log samples - see `examples/INDEX.md` (all samples from before the mechanism rewrite that depended on the now-retired trigger theory were deleted, not kept; everything currently in this directory is a real capture validated against the current rules - see INDEX.md's per-file verification record) |

@@ -292,7 +292,7 @@ any of these log sources).
 | Suricata 7+ | `rules/suricata.rules` | Feature-presence (9109627) + OOM-amplification signals (9109633 live-fire verified, 9109635 unverified) - 9109634/9109636 retired, see the file's own retired-rules section for why |
 | YARA 4+ | `rules/yara.yar` | Source/distribution fingerprint only - the old spray-blob rule is retired |
 | Sigma | `rules/sigma/` | Feature-presence, IDS-correlation (maps the new Suricata SIDs), process-spawn |
-| Sentinel KQL | `rules/sentinel/phpup2026.kql` | Feature-presence, OOM-amplification (Azure WAF body inspection required), process-spawn, hunting queries |
+| Sentinel KQL | `rules/sentinel/phpup2026.kql` | Feature-presence, process-spawn - the OOM-amplification/hunting queries this once had were retired 2026-10-21 (AzureDiagnostics has no raw-request-body field; not fixable, see the file's header comment) |
 
 Additional monitoring worth enabling:
 

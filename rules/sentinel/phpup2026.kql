@@ -9,20 +9,36 @@
 // corruption via bailout") and those queries are retired below, not
 // caveated. See ANALYSIS.md for the full mechanism writeup.
 //
+// 2026-10-21, same day, second rewrite: every AzureDiagnostics query in
+// this file (T2-1, T2-3, T3-3, T3-4, H1, H2) was built on a field,
+// `requestBody_s`, that does not exist. This was caught on the
+// Azure-Sentinel PR this file's queries were ported into
+// (Azure/Azure-Sentinel#15377) by a maintainer review (@oferInbar)
+// reporting a live SEM0100 schema error, then independently confirmed
+// here against Microsoft's own schema reference
+// (learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/agwfirewalllogs):
+// AGWFirewallLogs (what AzureDiagnostics draws Application
+// Gateway/Front Door WAF data from) has no raw-request-body column at
+// all. The closest field, DetailedData, only contains a snippet when a
+// managed ruleset rule has already matched something - not a
+// general-purpose field a custom query can pattern-match against. This
+// is not fixable by renaming a field; the data these six queries
+// needed was never exposed by the log source. Retired below, not
+// patched a third time. The duplicate-header-name OOM-amplification
+// signal this file could not carry over Sentinel/AzureDiagnostics is
+// still available via Suricata (rules/suricata.rules SID 9109633),
+// which inspects the real HTTP body directly and has been live-fire
+// verified against real captures - see that file and examples/INDEX.md.
+//
 // The real mechanism is cross-request: a longjmp-interrupted (producer)
 // request leaves worker-persistent globals dangling; a later, different
 // (consumer) request on the SAME WORKER reads them before its own init
 // has run. "Same worker" is not visible from any of these log sources -
 // none of them carry a worker/process identifier tied to the request.
-// What IS real and network-visible is the producer-side OOM-amplification
-// technique (main/rfc1867.c's now-fixed unbounded per-part header count),
-// so that's the center of gravity for the queries below.
 //
-// Table coverage:
+// Table coverage (after the second rewrite):
 //   W3CIISLog              IIS web server logs
 //   CommonSecurityLog      WAF / proxy / firewall (CEF)
-//   AzureDiagnostics       Azure WAF (App Gateway / Front Door)
-//   DeviceNetworkEvents    MDE network events
 //   DeviceProcessEvents    MDE process creation
 //   SecurityEvent          Windows Security (EventID 4688)
 
@@ -41,6 +57,10 @@ W3CIISLog
 
 
 // [T1-2] session.upload_progress feature in use - CommonSecurityLog (WAF/proxy)
+// Vendor-dependent: whether a CEF-emitting WAF/proxy populates Message
+// with request content (rather than just a rule-match summary) varies
+// by product - verify against your own vendor's CEF mapping before
+// relying on this.
 CommonSecurityLog
 | where TimeGenerated > ago(1h)
 | where RequestMethod == "POST"
@@ -48,42 +68,12 @@ CommonSecurityLog
 | project TimeGenerated, SourceIP, DestinationHostName, RequestURL, Message
 
 
-// ── TIER 2: OOM-AMPLIFICATION PRODUCER SIGNALS (medium-high confidence) ──────
-// Grounded directly in the real fix diff. Do NOT require
-// PHP_SESSION_UPLOAD_PROGRESS - CVE-2026-109618's OOM trigger works on any
-// multipart upload endpoint, not just session.upload_progress users.
-
-// [T2-1] Duplicate header name in one multipart part - Azure WAF. The fix
-// (main/rfc1867.c) restricts header saving to Content-Disposition/
-// Content-Type and skips duplicates; a legitimate part has exactly one
-// Content-Disposition (optionally one Content-Type). Requires WAF request
-// body inspection enabled.
-// 2026-10-21 fix: this previously counted literal "Content-Disposition"
-// occurrences (countof(requestBody_s, "Content-Disposition") >= 2) - a
-// real lab reproduction (github.com/rjmendez/phpup-2026, examples/pcaps/
-// phpup2026-real-oom-amplification.pcap) used an arbitrary short header
-// name instead, for maximum entries-per-byte, which that literal match
-// would miss entirely. Replaced with a generic "any header name repeated
-// within one request body" check.
-AzureDiagnostics
-| where TimeGenerated > ago(1h)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "multipart/form-data"
-| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
-| mv-expand HeaderName = HeaderNames to typeof(string)
-| summarize HeaderOccurrences = count()
-    by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, HeaderName
-| where HeaderOccurrences >= 2
-| summarize MaxDuplicateCount = max(HeaderOccurrences), DuplicatedHeaderNames = make_set(HeaderName)
-    by TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, MaxDuplicateCount, DuplicatedHeaderNames
-
-
 // [T2-2] High header density in multipart body - IIS (size proxy)
 // Coarser signal where body content isn't available: a multipart POST
 // whose size is high relative to a typical legitimate file upload's
 // form-field overhead can indicate many small header-heavy parts rather
-// than one large file. Weak alone - pair with T2-1 or T2-3 where possible.
+// than one large file. Weak alone, and a cheap evasion (pad with fewer,
+// larger header lines) - the real signal is header count, not byte size.
 W3CIISLog
 | where TimeGenerated > ago(1h)
 | where csMethod == "POST"
@@ -92,31 +82,22 @@ W3CIISLog
 | project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
 
 
-// [T2-3] Many empty-file fields or deeply nested field names - Azure WAF
-// Advisory text: empty file fields don't count toward max_file_uploads but
-// still create file-metadata arrays; nested field names multiply that
-// cost. Approximated by counting filename="" occurrences and bracket-
-// nesting depth in field names.
-AzureDiagnostics
-| where TimeGenerated > ago(1h)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "multipart/form-data"
-| extend EmptyFileCount = countof(requestBody_s, 'filename=""') + countof(requestBody_s, "filename=''")
-| extend NestedFieldNames = extract_all(@'name="([^"]*\[[^"]*\]\[[^"]*\])"', requestBody_s)
-| extend NestedFieldCount = array_length(NestedFieldNames)
-| where EmptyFileCount >= 10 or NestedFieldCount >= 10
-| project TimeGenerated, clientIP_s, host_s, requestUri_s, httpStatus_d, EmptyFileCount, NestedFieldCount
-
-
 // ── TIER 3: BEHAVIORAL / POST-EXPLOITATION ───────────────────────────────────
 
 // [T3-1] Shell spawned under PHP/web server process - MDE
 // Post-exploitation indicator, generically valid regardless of which
-// mechanism caused the RCE. Parent: php-fpm, php, lsphp, httpd, nginx.
+// mechanism caused the RCE. Parent: php-fpm, php, lsphp, httpd/apache2
+// (mod_php - PHP runs in-process inside the Apache worker, the SAPI
+// CVE-2026-109618 was actually demonstrated against), nginx.
+// 2026-10-21 fix: FileName switched from has_any (substring) to in~
+// (exact, case-insensitive) - has_any on short tokens like "sh"/"id"/"nc"
+// matches unrelated binaries (openssh, cloud-init, systemd-networkd).
+// Caught by the same Azure-Sentinel PR review that found the
+// requestBody_s schema error above; applied the same fix here.
 DeviceProcessEvents
 | where TimeGenerated > ago(1h)
-| where InitiatingProcessFileName has_any ("php-fpm", "php", "lsphp", "httpd", "apache2", "nginx")
-| where FileName has_any ("sh", "bash", "python", "python3", "perl", "curl", "wget", "nc", "ncat", "nmap")
+| where InitiatingProcessFileName matches regex @"(?i)^(php-fpm[\d.]*|php[\d.]*|lsphp[\d]*|apache2|httpd|nginx)$"
+| where FileName in~ ("sh", "bash", "dash", "zsh", "python", "python2", "python3", "perl", "curl", "wget", "nc", "ncat", "nmap")
        or ProcessCommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c", "exec(", "eval(")
 | project TimeGenerated, DeviceName, AccountName,
           InitiatingProcessFileName, InitiatingProcessCommandLine,
@@ -126,98 +107,15 @@ DeviceProcessEvents
 // [T3-2] Shell spawned under web service account - SecurityEvent 4688
 // For environments not running MDE. Requires process creation auditing
 // enabled (Security Policy: Audit Process Creation + command-line in audit).
+// 2026-10-21 fix: same has_any -> exact-match fix as T3-1, same reason.
 SecurityEvent
 | where TimeGenerated > ago(1h)
 | where EventID == 4688
 | where SubjectUserName has_any ("www-data", "apache", "nobody", "lsphp", "iis apppool")
-| where NewProcessName has_any ("sh", "bash", "python", "curl", "wget", "nc")
+| where NewProcessName in~ ("sh", "bash", "python", "python3", "curl", "wget", "nc")
        or CommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c")
 | project TimeGenerated, Computer, SubjectUserName,
           ParentProcessName, NewProcessName, CommandLine
-
-
-// [T3-3] Spike in header-duplication hits from a single IP - IIS/Azure WAF
-// Burst-over-time complement to T2-1: repeated amplification attempts
-// from one source in a short window, regardless of whether any one
-// request alone crosses the threshold.
-// 2026-10-21 fix: same under-inclusive literal-match bug as T2-1 (see
-// that query's comment) - replaced with the same generic duplicate-
-// header-name check before the burst aggregation.
-AzureDiagnostics
-| where TimeGenerated > ago(15m)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "multipart/form-data"
-| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
-| mv-expand HeaderName = HeaderNames to typeof(string)
-| summarize HeaderOccurrences = count()
-    by TimeGenerated, clientIP_s, host_s, requestUri_s, HeaderName
-| where HeaderOccurrences >= 2
-| summarize dummy = 1 by TimeGenerated, clientIP_s, host_s, requestUri_s
-| summarize
-    Hits    = count(),
-    Targets = make_set(requestUri_s, 5)
-    by bin(TimeGenerated, 5m), clientIP_s, host_s
-| where Hits >= 3
-| project TimeGenerated, clientIP_s, host_s, Hits, Targets
-
-
-// [T3-4] Post-exploitation correlation - outbound connection from a host
-// that showed a T2-1 amplification hit within the prior hour. Still
-// speculative: this does not confirm "same worker," only "same host,
-// recently." Tool-agnostic (no distribution-domain IOC).
-// 2026-10-21 fix: same under-inclusive literal-match bug as T2-1/T3-3/H2
-// (see T2-1's comment) - fixed the same way.
-let suspectHosts =
-    AzureDiagnostics
-    | where TimeGenerated > ago(1h)
-    | where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-    | where requestBody_s has "multipart/form-data"
-    | extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
-    | mv-expand HeaderName = HeaderNames to typeof(string)
-    | summarize HeaderOccurrences = count() by TimeGenerated, host_s, HeaderName
-    | where HeaderOccurrences >= 2
-    | project MatchTime = TimeGenerated, host_s;
-DeviceNetworkEvents
-| where TimeGenerated > ago(1h)
-| join kind=inner suspectHosts on $left.DeviceName == $right.host_s
-| where TimeGenerated between (MatchTime .. (MatchTime + 15m))
-| project TimeGenerated, DeviceName, InitiatingProcessFileName,
-          RemoteUrl, RemotePort, RemoteIP, MatchTime
-
-
-// ── HUNTING ───────────────────────────────────────────────────────────────────
-
-// [H1] PHP_SESSION_UPLOAD_PROGRESS in request body - Azure WAF
-// Requires WAF request body inspection enabled. Low volume on benign sites.
-AzureDiagnostics
-| where TimeGenerated > ago(24h)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "PHP_SESSION_UPLOAD_PROGRESS"
-| project TimeGenerated, clientIP_s, host_s, requestUri_s,
-          httpStatus_d, requestBody_s
-
-
-// [H2] Distribution of max per-header-name duplicate count per multipart
-// request - Azure WAF. Baseline this against normal legitimate multi-file
-// upload traffic before setting an alerting threshold on T2-1/T3-3; a form
-// with many real file fields also has many Content-Disposition headers,
-// just not duplicated ones within a single part.
-// 2026-10-21 fix: previously counted literal "Content-Disposition" only
-// (same bug as T2-1/T3-3) - a baseline built that way would never show
-// the real attack technique's signature at all (it uses other header
-// names), making the "is this normal" comparison meaningless. Fixed to
-// measure the same generic duplicate-header-name signal T2-1 alerts on.
-AzureDiagnostics
-| where TimeGenerated > ago(24h)
-| where Category in ("ApplicationGatewayAccessLog", "FrontDoorAccessLog")
-| where requestBody_s has "multipart/form-data"
-| extend HeaderNames = extract_all(@"\r\n([!-9;-~]+):", requestBody_s)
-| mv-expand HeaderName = HeaderNames to typeof(string)
-| summarize HeaderOccurrences = count()
-    by TimeGenerated, clientIP_s, host_s, requestUri_s, HeaderName
-| summarize MaxDuplicateCount = max(HeaderOccurrences) by TimeGenerated, clientIP_s, host_s, requestUri_s
-| summarize RequestCount = count() by MaxDuplicateCount
-| sort by MaxDuplicateCount asc
 
 
 // ── RETIRED (2026-10-21) ──────────────────────────────────────────────────────
@@ -230,12 +128,13 @@ AzureDiagnostics
 //   was already flagged unvalidated in the prior revision (a real lab
 //   test produced a clean 200 OK under the documented precondition) and
 //   the premise itself (same-request stall causing a same-request crash)
-//   is now known to be the wrong mechanism entirely. Not replaced with a
-//   new crash-ratio theory - what the real producer request's HTTP-visible
-//   symptom actually looks like (500 page, truncated response, or silent
-//   continuation with only a log-side OOM entry) is itself unconfirmed;
-//   see ANALYSIS.md's "What we have NOT reproduced."
+//   is now known to be the wrong mechanism entirely.
 // Old H2 (100+ identically-named array fields): built on the dead
-//   spray-count theory. Replaced by T2-3's empty-file-field/nested-field
-//   counting, which maps to a real, fix-confirmed amplification vector
-//   instead.
+//   spray-count theory.
+// T2-1, T2-3, T3-3, T3-4, H1, H2 (duplicate/empty-file-field header
+//   signals, burst correlation, hunting queries - all AzureDiagnostics):
+//   retired 2026-10-21, second rewrite, same day as the fixes above.
+//   All six queried a field, `requestBody_s`, that does not exist on
+//   AzureDiagnostics/AGWFirewallLogs - see this file's header comment
+//   for the schema verification. Not a logic bug fixable by patching;
+//   the underlying data was never available from this log source.
