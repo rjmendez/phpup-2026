@@ -144,16 +144,27 @@ no fix.
 
 ## Detection
 
+Generic, mechanics-based — works against any exploit for this bug class, not
+just the released tool:
+
 ```
-boundary=B7kQpoc618 / B7kQpoc619          # exact POC Content-Type boundary
-User-Agent: php2shell-109618 / php2shell-109619
-PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3      # default POC session ID
-149x t[] fields, each 288 bytes
-body bytes @+16: 06 01 00 00  @+160: 08 03 00 00  @+200: "system\x00"
-JACKALPOC in response body                 # RCE confirmed
+required fields:  PHP_SESSION_UPLOAD_PROGRESS + PHPSESSID in a multipart POST
+spray geometry:    body far larger than a tracked upload's own form fields need
+payload content:   dangerous-function string (system/exec/passthru/shell_exec/
+                   popen/proc_open) inside the upload_progress context
+structural match:  body bytes @+16: 06 01 00 00 (IS_STRING_EX)
+                   @+160: 08 03 00 00 (IS_OBJECT_EX)  — fixed by PHP's zval ABI,
+                   not by any tool's code
 ```
 
-Rules: `rules/suricata.rules`, `rules/yara.yar`, `rules/sigma/` in this repo.
+Rules: `rules/suricata.rules`, `rules/yara.yar` (source/binary fingerprint,
+intentionally tool-specific), `rules/sigma/`, `rules/sentinel/` in this repo.
+
+The one released PoC's literal strings (boundary `B7kQpoc61*`, User-Agent
+`php2shell-*`, default session ID `a1b2c3d4e5f6a7b8c9d0e1f2a3`, canary
+`JACKALPOC`) are kept as blocklist-grade IOCs under `this_artifact_only` in
+`iocs.json` — trivial for an attacker to change, so not relied on above as
+the detection strategy.
 
 ---
 
