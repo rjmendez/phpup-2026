@@ -39,8 +39,7 @@ Note: `disable_functions` is a php.ini-level setting — it cannot be overridden
 by `.htaccess` or `ini_set()`. Set it in the server php.ini or php-fpm pool
 `php_admin_value`.
 
-**Custom session save handlers increase exploitability.** The research agent
-confirmed: with `session_set_save_handler()` or `session.save_handler=user`,
+**Custom session save handlers increase exploitability.** With `session_set_save_handler()` or `session.save_handler=user`,
 arbitrary PHP executes inside `php_session_initialize()`, making the UAF stall
 window more reliable. If you use Redis/Memcached sessions:
 
