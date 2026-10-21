@@ -23,7 +23,9 @@ SHA256: `0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63`
 | `rules/yara.yar` | YARA 4+ — tool/source fingerprint (intentionally PoC-specific; file/memory forensics use case, not network detection) |
 | `rules/sigma/` | Sigma (one rule per file) — generic, mechanics-based |
 | `rules/sentinel/phpup2026.kql` | Microsoft Sentinel KQL — generic, mechanics-based |
+| `rules/sentinel/analytics-rules/` | Sentinel Analytics Rule YAML (one rule per file) — generic, mechanics-based |
 | `ANALYSIS.md` | technical writeup: UAF chain, codebase survey, fix analysis |
+| `HARDENING.md` | defense-in-depth hardening guide, layered beyond the primary mitigation |
 
 ## Detection philosophy
 
