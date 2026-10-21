@@ -160,24 +160,48 @@ same-request stall creating a same-request UAF. It's a `longjmp` on one
 **later, different request** (consumer) on the **same worker**, before
 that request's own initialization has run.
 
-## What we have NOT reproduced
+## What we have NOT reproduced - and why php-fpm may be the wrong SAPI to try it on
 
-- **A surviving, corrupted worker.** The header-explosion OOM trigger
-  reproduced above hard-crashes the worker (process exit + respawn) at
-  every `memory_limit` tested below the 408MB peak; it does not leave a
-  survivor with dangling globals the way CVE-2026-109619's consumer step
-  needs. The advisory's "strongest demonstrated case" is PHP 8.5 with
-  `fatal_error_backtraces` enabled, a different producer path not tied to
-  this OOM trigger at all - untested as of this writing (in progress:
-  building PHP 8.5.0, genuinely pre-patch, from source, since both the
-  `ondrej/php` PPA and `packages.sury.org` only distribute the already-
-  patched 8.5.12).
-- An end-to-end RCE, or even a confirmed ASAN use-after-free, under
-  whichever producer trigger does leave a surviving worker.
-- Which early-init paths beyond `php_session_rfc1867_callback` and
+Built PHP 8.5.0 (genuinely pre-patch - both the `ondrej/php` PPA and
+`packages.sury.org` only distribute the already-patched 8.5.12) from
+source to test the advisory's "strongest demonstrated case":
+`fatal_error_backtraces` enabled.
+
+- **An ordinary uncaught fatal (undefined function call), and an
+  ordinary `memory_limit` soft-check fatal (the normal "Allowed memory
+  size of N bytes exhausted" warning-then-fatal from a userland
+  allocation), both survive cleanly on 8.5** - same worker PID before
+  and after, no visible corruption in a follow-up request. Expected:
+  these go through PHP's normal, intact exception-to-fatal-error
+  pipeline, not the vulnerable low-level allocator path.
+- **The same header-explosion payload that produced the 408MB/58x
+  amplification above also reproduces on 8.5** (measured 440MB peak
+  at `memory_limit=512M`, consistent with 8.3) - but at every
+  `memory_limit` below that peak (tested 2M/16M/128M/256M), the
+  **worker process dies and is replaced, on 8.5 exactly as on 8.3**.
+  `fatal_error_backtraces` being on did not change this.
+- **The exit code is always `70`, PHP-FPM's own internal
+  "unrecoverable state" exit code** - this is FPM's process-supervision
+  model itself recycling the child, not a bare SIGSEGV/kernel-level
+  kill. That strongly suggests **php-fpm's own worker-recycling-on-fatal
+  behavior is an incidental, pre-existing mitigation** against this
+  specific bug's cross-request consumer step: a replaced worker can't
+  carry forward dangling globals to the next request. This would also
+  explain why the advisory names **mod_php** (embedded in each Apache
+  child/thread, no equivalent per-request process recycling) as where
+  RCE was confirmed, rather than php-fpm.
+- Consequently: reproducing CVE-2026-109619's actual survive-with-
+  corruption consumer step likely needs an **Apache + mod_php** lab,
+  not php-fpm - untested here. Not yet built; would be further work.
+- Also still unconfirmed: an end-to-end RCE or ASAN use-after-free under
+  whichever producer trigger does leave a surviving worker, and which
+  early-init paths beyond `php_session_rfc1867_callback` and
   `zend_error_zstr_at` are reachable in a default configuration.
 
-Tracked as open follow-up work, not claimed as done.
+See `examples/pcaps/phpup2026-real-fpm-worker-recycle-85.pcap` and the
+paired `php-fpm.log` (both PHP versions' "exited with code 70, child
+<new-pid> started" pattern, logged back to back across a `memory_limit`
+sweep). Tracked as open follow-up work, not claimed as done.
 
 ## Patch
 

@@ -1,0 +1,49 @@
+[21-Oct-2026 15:50:45] NOTICE: configuration file /tmp/php85-build/php85-fpm.conf test is successful
+[21-Oct-2026 15:50:57] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:50:57] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:50:57] NOTICE: fpm is running, pid 1922046
+[21-Oct-2026 15:50:57] NOTICE: ready to handle connections
+[21-Oct-2026 15:51:58] NOTICE: Terminating ...
+[21-Oct-2026 15:51:58] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:51:59] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:51:59] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:51:59] NOTICE: fpm is running, pid 1923203
+[21-Oct-2026 15:51:59] NOTICE: ready to handle connections
+[21-Oct-2026 15:52:42] NOTICE: Terminating ...
+[21-Oct-2026 15:52:42] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:52:43] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:43] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:43] NOTICE: fpm is running, pid 1924046
+[21-Oct-2026 15:52:43] NOTICE: ready to handle connections
+[21-Oct-2026 15:52:44] WARNING: [pool www85] child 1924047 exited with code 70 after 1.117760 seconds from start
+[21-Oct-2026 15:52:44] NOTICE: [pool www85] child 1924056 started
+[21-Oct-2026 15:52:45] NOTICE: Terminating ...
+[21-Oct-2026 15:52:45] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:52:46] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:46] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:46] NOTICE: fpm is running, pid 1924112
+[21-Oct-2026 15:52:46] NOTICE: ready to handle connections
+[21-Oct-2026 15:52:47] WARNING: [pool www85] child 1924113 exited with code 70 after 1.054331 seconds from start
+[21-Oct-2026 15:52:47] NOTICE: [pool www85] child 1924122 started
+[21-Oct-2026 15:52:47] NOTICE: Terminating ...
+[21-Oct-2026 15:52:47] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:52:48] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:48] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:48] NOTICE: fpm is running, pid 1924164
+[21-Oct-2026 15:52:48] NOTICE: ready to handle connections
+[21-Oct-2026 15:52:49] WARNING: [pool www85] child 1924165 exited with code 70 after 1.447288 seconds from start
+[21-Oct-2026 15:52:49] NOTICE: [pool www85] child 1924212 started
+[21-Oct-2026 15:52:50] NOTICE: Terminating ...
+[21-Oct-2026 15:52:50] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:52:51] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:51] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:51] NOTICE: fpm is running, pid 1924233
+[21-Oct-2026 15:52:51] NOTICE: ready to handle connections
+[21-Oct-2026 15:52:52] WARNING: [pool www85] child 1924234 exited with code 70 after 1.247415 seconds from start
+[21-Oct-2026 15:52:52] NOTICE: [pool www85] child 1924245 started
+[21-Oct-2026 15:52:52] NOTICE: Terminating ...
+[21-Oct-2026 15:52:52] NOTICE: exiting, bye-bye!
+[21-Oct-2026 15:52:53] NOTICE: [pool www85] 'user' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:53] NOTICE: [pool www85] 'group' directive is ignored when FPM is not running as root
+[21-Oct-2026 15:52:53] NOTICE: fpm is running, pid 1924285
+[21-Oct-2026 15:52:53] NOTICE: ready to handle connections

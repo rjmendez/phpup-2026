@@ -44,7 +44,18 @@
   },
 
   "unreproduced": {
-    "note": "An end-to-end RCE, or even a confirmed ASAN use-after-free, under whichever producer trigger leaves a surviving (not crashed) worker. The header-explosion OOM trigger reproduced above (see reproduced_2026_10_21) hard-crashes the worker instead of surviving with corrupted state -- it demonstrates CVE-2026-109618 convincingly but not CVE-2026-109619's cross-request consumer step. The advisory's strongest demonstrated case for that is PHP 8.5 + fatal_error_backtraces, a different producer path, untested here as of this writing. Also unconfirmed: which early-init paths beyond php_session_rfc1867_callback and zend_error_zstr_at are reachable in a default configuration. See ANALYSIS.md."
+    "note": "An end-to-end RCE, or even a confirmed ASAN use-after-free, under whichever producer trigger leaves a surviving (not crashed) worker. Tested PHP 8.5.0 (genuinely pre-patch, built from source) with fatal_error_backtraces=On (default): an ordinary uncaught fatal and an ordinary memory_limit soft-check fatal both survive cleanly, no visible corruption -- expected, since both go through PHP's intact normal fatal-error pipeline. The SAME header-explosion payload that produced 408MB/58x on 8.3 also reproduces on 8.5 (440MB peak at memory_limit=512M) but hits the identical hard-crash-and-respawn pattern below that threshold, exit code 70 both times (PHP-FPM's own internal 'unrecoverable state' exit code). This suggests php-fpm's own worker-recycling-on-fatal is an incidental mitigation against the cross-request consumer step, and that reproducing it needs Apache+mod_php (which the advisory specifically names as where RCE was confirmed) rather than php-fpm. Not yet built. Also unconfirmed: which early-init paths beyond php_session_rfc1867_callback and zend_error_zstr_at are reachable in a default configuration. See ANALYSIS.md."
+  },
+
+  "reproduced_85_2026_10_21": {
+    "note": "Own lab, PHP 8.5.0 built from source (genuinely pre-patch -- ondrej/php PPA and packages.sury.org both only distribute the already-patched 8.5.12). fatal_error_backtraces=On (default).",
+    "ordinary_fatals_survive": "uncaught undefined-function error, and memory_limit soft-check fatal -- both: same worker PID before/after, no visible corruption",
+    "same_header_explosion_trigger_as_83": {
+      "peak_memory_bytes_at_512M_limit": 440401920,
+      "amplification": "consistent with the 8.3 measurement (~58x)",
+      "memory_limit_sweep_2M_16M_128M_256M": "hard worker crash + respawn every time, exit code 70 (php-fpm internal), identical pattern to PHP 8.3"
+    },
+    "artifacts": "examples/pcaps/phpup2026-real-fpm-worker-recycle-85.pcap + examples/logs/phpup2026-real-fpm-worker-recycle-85-phpfpm.log"
   },
 
   "this_artifact_only": {
