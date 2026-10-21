@@ -36,7 +36,36 @@
 // has run. "Same worker" is not visible from any of these log sources -
 // none of them carry a worker/process identifier tied to the request.
 //
-// Table coverage (after the second rewrite):
+// 2026-10-21, same day, third rewrite: checked every remaining field in
+// this file against Microsoft's own schema references (same technique
+// that caught requestBody_s above), not just the ones already under
+// suspicion. Found one more: W3CIISLog has no `csHeaders` column either
+// (learn.microsoft.com/en-us/azure/azure-monitor/reference/tables/
+// w3ciislog) - standard W3C IIS logging doesn't capture request headers
+// beyond the specific fields that table lists. T1-1 fixed by dropping
+// the clause that relied on it (now weaker: can no longer tell a
+// multipart POST from any other POST); T2-2 retired outright, since
+// that field was its entire basis for the "multipart" check and nothing
+// is left without it. Confirmed real and unaffected: CommonSecurityLog's
+// Message/RequestMethod/SourceIP/DestinationHostName/RequestURL
+// (learn.microsoft.com/.../commonsecuritylog), DeviceProcessEvents'
+// InitiatingProcessFileName/FileName/ProcessCommandLine/AccountName/
+// DeviceName and TimeGenerated specifically - the latter isn't in the
+// native M365 Defender Advanced Hunting schema (which calls it
+// `Timestamp`), but is confirmed correct for Sentinel-ingested
+// DeviceProcessEvents by cross-checking a real, already-merged
+// detection in this same repo (Detections/DeviceProcessEvents/
+// SolarWinds_SUNBURST_Process-IOCs.yaml uses `timestamp = TimeGenerated`
+// directly) - and SecurityEvent's EventID/SubjectUserName/
+// NewProcessName/CommandLine/ParentProcessName/Computer
+// (learn.microsoft.com/.../securityevent). One real, non-schema finding
+// while cross-checking against that same SUNBURST rule: this repo's
+// PHPShellSpawn.yaml mapped the FileHash entity to DeviceProcessEvents'
+// SHA256 column, which Microsoft's own schema docs say is "usually not
+// populated - use the SHA1 column when available"; fixed there (see
+// rules/sentinel/analytics-rules/phpup2026-PHPShellSpawn.yaml).
+//
+// Table coverage (after the third rewrite):
 //   W3CIISLog              IIS web server logs
 //   CommonSecurityLog      WAF / proxy / firewall (CEF)
 //   DeviceProcessEvents    MDE process creation
@@ -48,11 +77,21 @@
 // [T1-1] session.upload_progress feature reachable and in use - IIS
 // Baseline precondition for the CVE-2026-109619 consumer path specifically.
 // Also how the legitimate progress-bar feature is used.
+// 2026-10-21 fix: this previously also checked `csHeaders has
+// "multipart/form-data"` - confirmed against Microsoft's own W3CIISLog
+// schema reference (learn.microsoft.com/en-us/azure/azure-monitor/
+// reference/tables/w3ciislog) that no `csHeaders` column exists at all;
+// standard W3C IIS logging does not capture arbitrary request headers
+// (including Content-Type), only the specific fields listed there. Not
+// fixable by renaming a field. Removed that clause - this query can
+// only use what the schema actually has (method, cookie, and the query
+// string, for the rare case the field name leaks into a URL) and can no
+// longer distinguish a multipart POST from any other POST. Weaker than
+// before, honestly, not just differently worded.
 W3CIISLog
 | where TimeGenerated > ago(1h)
 | where csMethod == "POST"
-| where csHeaders has "multipart/form-data" or csUriQuery has "PHP_SESSION_UPLOAD_PROGRESS"
-| where csCookie has "PHPSESSID="
+| where csCookie has "PHPSESSID=" or csUriQuery has "PHP_SESSION_UPLOAD_PROGRESS"
 | project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
 
 
@@ -66,20 +105,6 @@ CommonSecurityLog
 | where RequestMethod == "POST"
 | where Message has "PHP_SESSION_UPLOAD_PROGRESS" and Message has "PHPSESSID="
 | project TimeGenerated, SourceIP, DestinationHostName, RequestURL, Message
-
-
-// [T2-2] High header density in multipart body - IIS (size proxy)
-// Coarser signal where body content isn't available: a multipart POST
-// whose size is high relative to a typical legitimate file upload's
-// form-field overhead can indicate many small header-heavy parts rather
-// than one large file. Weak alone, and a cheap evasion (pad with fewer,
-// larger header lines) - the real signal is header count, not byte size.
-W3CIISLog
-| where TimeGenerated > ago(1h)
-| where csMethod == "POST"
-| where csHeaders has "multipart/form-data"
-| where csBytes >= 40000
-| project TimeGenerated, cIP, csHost, csUriStem, csMethod, csBytes, scStatus
 
 
 // ── TIER 3: BEHAVIORAL / POST-EXPLOITATION ───────────────────────────────────
@@ -138,3 +163,10 @@ SecurityEvent
 //   AzureDiagnostics/AGWFirewallLogs - see this file's header comment
 //   for the schema verification. Not a logic bug fixable by patching;
 //   the underlying data was never available from this log source.
+// T2-2 (high header density in multipart body, W3CIISLog size proxy):
+//   retired 2026-10-21, third rewrite, same day. Same root cause as the
+//   W3CIISLog `csHeaders` fix on T1-1 above, but here the field being
+//   removed (`csHeaders has "multipart/form-data"`) was this query's
+//   ENTIRE basis for distinguishing a multipart POST from any other
+//   POST - there is nothing left to salvage. W3CIISLog genuinely has no
+//   way to tell whether a POST was multipart/form-data at all.

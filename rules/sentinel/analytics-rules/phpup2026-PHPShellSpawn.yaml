@@ -32,6 +32,15 @@ description: |
   systemd-networkd), and apache2/httpd added to the parent-process match
   since CVE-2026-109618 was demonstrated against Apache mod_php
   specifically, not php-fpm.
+
+  2026-10-21, same day, second fix: FileHash entity was mapped to this
+  table's SHA256 column - Microsoft's own DeviceProcessEvents schema
+  reference (learn.microsoft.com/en-us/defender-xdr/
+  advanced-hunting-deviceprocessevents-table) states that field "is
+  usually not populated - use the SHA1 column when available". Switched
+  to SHA1, confirmed as the convention a real, already-merged detection
+  in this same Sentinel repo uses for the same table
+  (Detections/DeviceProcessEvents/SolarWinds_SUNBURST_Process-IOCs.yaml).
   References:
   - https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
   - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
@@ -67,12 +76,12 @@ query: |
            "/bin/sh", "/bin/bash", "bash -i", "python -c", "python3 -c",
            "exec(", "eval(", "base64 -d", "curl ", "wget "
          )
-  | extend HashAlgorithm = "SHA256"
+  | extend HashAlgorithm = "SHA1"
   | project TimeGenerated, DeviceName,
             InitiatingProcessAccountName, InitiatingProcessAccountDomain,
             InitiatingProcessAccountSid,
             InitiatingProcessFileName, InitiatingProcessCommandLine,
-            FileName, ProcessCommandLine, FolderPath, SHA256, HashAlgorithm
+            FileName, ProcessCommandLine, FolderPath, SHA1, HashAlgorithm
 entityMappings:
   - entityType: Account
     fieldMappings:
@@ -95,8 +104,8 @@ entityMappings:
       - identifier: Algorithm
         columnName: HashAlgorithm
       - identifier: Value
-        columnName: SHA256
-version: 1.0.4
+        columnName: SHA1
+version: 1.0.5
 kind: Scheduled
 metadata:
     source:
