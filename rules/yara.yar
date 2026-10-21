@@ -2,6 +2,15 @@
 // CVE-2026-109619 · PHP session.upload_progress UAF · RCE
 // (not CVE-2026-109618 — a separate, unrelated OOM-corruption bug per PHP's
 // official 2026-10-21 advisory; see README.md "Official status")
+//
+// `phpup2026_spray` verified with real `yara` (4.5.0) against real request
+// bodies: fires on examples/http/phpup2026-real-dangerous-fn-zval-markers.http
+// and examples/pcaps/phpup2026-real-blob-CVE-109618-dtor0.pcap; correctly
+// does NOT fire on the benign or oversized-only samples (no false
+// positive from body size or PHP_SESSION_UPLOAD_PROGRESS presence alone).
+// `phpup2026_source`/`phpup2026_distribution` weren't exercised — this lab
+// never carried the actual PoC tool's literal strings (B7kQpoc*, J4ck3LSyN,
+// the distribution URL), by design (those are this_artifact_only IOCs).
 
 // Forged zend_fcall_info blob in HTTP body or memory.
 // spray: 149x 288-byte blobs; IS_STRING_EX@+16, IS_OBJECT_EX@+160, system\0@+200.

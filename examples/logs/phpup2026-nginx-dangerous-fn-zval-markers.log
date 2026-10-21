@@ -7,6 +7,7 @@
 # validate that the IDS signature matches real wire bytes, which is what
 # a payload-content rule is actually supposed to catch regardless of
 # whether the payload behind it works. Confirmed to trigger Suricata SIDs
-# 9109627, 9109629, 9109630, and 9109632 for real; see
-# ../logs/phpup2026-eve-positive.json.
+# 9109627, 9109629, and 9109630 for real, and YARA rule `phpup2026_spray`
+# for real; see ../logs/phpup2026-eve-positive.json and
+# ../http/phpup2026-real-dangerous-fn-zval-markers.http.
 2026-10-21T10:58:47-04:00 192.0.2.10 "POST" "/upload.php" "" 8080 "-" 203.0.113.42 "-" "PHPSESSID=c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8" "multipart/form-data; boundary=B3marker003" 200 0 0 361 546 0.002

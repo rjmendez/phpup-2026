@@ -1,2 +1,3 @@
 *.pcap binary
 *.pcapng binary
+*.http binary

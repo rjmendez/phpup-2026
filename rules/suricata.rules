@@ -16,13 +16,17 @@
 # One rule per physical line below (Suricata requires this — a rule split
 # across multiple lines, as an earlier revision of this file had it, fails
 # to parse; confirmed against Suricata 7.0.3). Verified against real
-# captures in examples/logs/: 9109627/9109628/9109629/9109630 all fire as
-# intended on real traffic. 9109631/9109632 were rewritten from `hostbits`
-# to `xbits` (see note below) and do fire, but only confirmed on a
-# loopback lab where client and server share one IP — the correlation
-# there is a same-IP artifact, not confirmed proof of genuine cross-flow
-# host correlation between two distinct IPs. Re-verify 9109631/9109632 in
-# a topology with a real client/server IP split before relying on them.
+# captures with distinct client/server IPs (examples/pcaps/,
+# examples/logs/phpup2026-eve-*.json): 9109627/9109628/9109629/9109630 all
+# fire as intended on real traffic. 9109631/9109632 were rewritten from
+# `hostbits` to `xbits` (see note below) and are confirmed to parse and
+# load, but NOT confirmed to fire end to end — this lab never produced a
+# genuine second, server-initiated outbound connection to correlate
+# against (there is no real RCE to generate one from; see ANALYSIS.md's
+# 2026-10-21 mechanism finding), so 9109631/9109632 remain unexercised.
+# An earlier version of this note claimed they fired, but that was on a
+# loopback capture where client and server shared one IP, which made the
+# xbit trivially self-match — not a real cross-host correlation.
 
 # --- feature-presence / policy (low severity, high recall) ---
 
