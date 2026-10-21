@@ -56,7 +56,8 @@ uncovered item.
 | `rules/sentinel/analytics-rules/` | Sentinel Analytics Rule YAML (one rule per file) — generic, mechanics-based |
 | `ANALYSIS.md` | technical writeup: UAF chain, codebase survey, fix analysis |
 | `HARDENING.md` | defense-in-depth hardening guide, layered beyond the primary mitigation |
-| `examples/` | sanitized pcap/http/log samples for validating the rules above — see `examples/README.md` |
+| `examples/` | sanitized pcap/http/log samples for validating the rules above — see `examples/INDEX.md` |
+| `scripts/sigma_eval.py` | minimal real Sigma-condition evaluator, used to catch a `cs-bytes|contains` bug in two sigma rules against real captured events |
 
 ## Detection philosophy
 
