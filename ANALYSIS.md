@@ -163,7 +163,7 @@ PoC literals (`B7kQpoc61*`, `php2shell-*`, `a1b2c3d4e5f6a7b8c9d0e1f2a3`, `JACKAL
 session.upload_progress.enabled = 0
 ```
 
-Patch to 8.2.35+ / 8.4.5+ when available. PHP 5/6/7 are permanently exposed.
+Patch to 8.2.35+ / 8.4.5+. PHP 5/6/7 are permanently exposed.
 
 ---
 

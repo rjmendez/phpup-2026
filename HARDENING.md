@@ -233,7 +233,7 @@ inotifywait -m /var/lib/php/sessions -e create | \
 ## Quick-check priority order
 
 1. **Patch PHP** — scheduled today (8.2.35+ / 8.4.5+)
-2. `session.upload_progress.enabled = 0` if you can tolerate it
+2. `session.upload_progress.enabled = 0`
 3. `disable_functions` includes `system,exec,shell_exec,passthru,popen`
 4. Dedicated process user + `seccomp`/AppArmor `execve` block
 5. Egress filter from web server process
