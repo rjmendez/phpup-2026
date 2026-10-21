@@ -1,0 +1,21 @@
+title: phpup-2026 RCE Canary in HTTP Response
+id: 5e1f3a72-8d4b-4c9e-a2f1-6b8d0e2f4a6c
+status: stable
+description: |
+  JACKALPOC string in HTTP response body — confirms successful RCE.
+  Both pocs use this as the command output marker via --command default.
+references:
+  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+tags:
+  - attack.t1059
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: webserver
+detection:
+  selection:
+    sc-bytes|contains: 'JACKALPOC'
+  condition: selection
+falsepositives:
+  - none; canary is poc-specific
+level: critical

@@ -1,0 +1,28 @@
+title: phpup-2026 Session Upload Progress Exploit Pattern
+id: 7d9e1b23-4f6a-4c8d-9a2e-5b1f3d7e9c0a
+status: experimental
+description: |
+  PHPSESSID cookie + PHP_SESSION_UPLOAD_PROGRESS field in a multipart POST.
+  Both CVEs require both fields. Tune on Content-Length to reduce fp from
+  legitimate progress-tracked uploads.
+references:
+  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+tags:
+  - attack.t1190
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: webserver
+detection:
+  selection_method:
+    cs-method: 'POST'
+  selection_ct:
+    cs-headers|contains: 'multipart/form-data'
+  selection_cookie:
+    cs-cookie|contains: 'PHPSESSID='
+  selection_body:
+    cs-bytes|gte: 10000
+  condition: all of selection_*
+falsepositives:
+  - legitimate file uploads using session.upload_progress — filter on Content-Length
+level: high

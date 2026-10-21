@@ -1,0 +1,23 @@
+title: phpup-2026 Default PoC Session ID
+id: 3a7c2d84-5e9b-4f1a-8d6c-2e4f1a3b5c7d
+status: stable
+description: |
+  Hardcoded default SIDs from poc0/poc1 (a1b2c3d4e5f6a7b8c9d0e1f2a3)
+  and poc_trigger.py (32x 'a').
+references:
+  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+tags:
+  - attack.t1190
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: webserver
+detection:
+  selection:
+    cs-cookie|contains:
+      - 'PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3'
+      - 'PHPSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  condition: selection
+falsepositives:
+  - none; values are poc-specific constants
+level: high

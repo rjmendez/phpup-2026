@@ -1,0 +1,19 @@
+title: phpup-2026 POC Multipart Boundary
+id: 8a3d1f52-1e4a-4b8c-9f2d-0c7e6a9b3d4e
+status: stable
+description: Exact hardcoded boundary strings from poc0_109618.py and poc1_109619.py.
+references:
+  - http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz
+tags:
+  - attack.t1190
+  - cve.2026.109618
+  - cve.2026.109619
+logsource:
+  category: webserver
+detection:
+  selection:
+    cs-headers|contains: 'boundary=B7kQpoc61'
+  condition: selection
+falsepositives:
+  - none; boundary is poc-specific
+level: critical

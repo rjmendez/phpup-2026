@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "cves": ["CVE-2026-109618", "CVE-2026-109619"],
+    "cvss_v4": 9.2,
+    "affected": "PHP 8.x < 2026-10-21",
+    "artifact": "http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz",
+    "artifact_sha256": "0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63",
+    "updated": "2026-10-21"
+  },
+
+  "network": {
+    "domains": ["jackalsyn.com"],
+    "urls": ["http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz"]
+  },
+
+  "http": {
+    "boundaries": ["B7kQpoc618", "B7kQpoc619"],
+    "user_agents": ["php2shell-109618", "php2shell-109619"],
+    "default_sids": [
+      "a1b2c3d4e5f6a7b8c9d0e1f2a3",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "required_fields": ["PHP_SESSION_UPLOAD_PROGRESS", "PHPSESSID"],
+    "canary": "JACKALPOC"
+  },
+
+  "spray": {
+    "blob_size": 288,
+    "count": 149,
+    "nTableSize": 256,
+    "alloc_bin": 320,
+    "offsets": {
+      "0":   "FCI size=64  (0x40 LE qword)",
+      "16":  "IS_STRING_EX (0x106 LE dword)",
+      "48":  "param_count=1",
+      "64":  "ZEND_INTERNAL=1",
+      "152": "handler → zend_call_function",
+      "160": "IS_OBJECT_EX (0x308 LE dword)",
+      "200": "\"system\\0<cmd>\\0\""
+    }
+  },
+
+  "build_deltas": {
+    "_note": "delta = zval_ptr_dtor - zend_call_function; per-build, not portable",
+    "ubuntu_8.5.4_profile21":  "0x43EF0",
+    "lsphp82_8.2.34_bookworm": "0xc930",
+    "lsphp82_8.2.34_noble":    "0xcef0",
+    "lsphp82_8.2.34_jammy":    "0xd060"
+  }
+}

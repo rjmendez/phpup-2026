@@ -1,0 +1,77 @@
+# phpup-2026 — Suricata rules
+# CVE-2026-109618 / CVE-2026-109619 · PHP session.upload_progress UAF · RCE
+# SID range 9109618–9109626
+
+# --- exact poc signatures (zero fp, block-safe) ---
+
+# hardcoded boundary from poc0_109618.py and poc1_109619.py
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 poc boundary B7kQpoc61";
+  flow:established,to_server;
+  http.header; content:"boundary=B7kQpoc61"; nocase; fast_pattern;
+  classtype:web-application-attack; sid:9109618; rev:1;)
+
+# User-Agent set by poc0 deliver_live()
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 ua php2shell-109618";
+  flow:established,to_server;
+  http.user_agent; content:"php2shell-109618"; fast_pattern;
+  classtype:web-application-attack; sid:9109619; rev:1;)
+
+# User-Agent set by poc1 talk()
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 ua php2shell-109619";
+  flow:established,to_server;
+  http.user_agent; content:"php2shell-109619"; fast_pattern;
+  classtype:web-application-attack; sid:9109620; rev:1;)
+
+# default SID from poc0/poc1 main() argparse defaults
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 default poc sid a1b2c3d4";
+  flow:established,to_server;
+  http.cookie; content:"PHPSESSID=a1b2c3d4e5f6a7b8c9d0e1f2a3"; fast_pattern;
+  classtype:web-application-attack; sid:9109621; rev:1;)
+
+# trigger harness SID — poc_trigger.py hardcodes SID = "a" * 32
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 trigger harness sid 32xa";
+  flow:established,to_server;
+  http.cookie; content:"PHPSESSID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; fast_pattern;
+  classtype:web-application-attack; sid:9109622; rev:1;)
+
+# --- payload binary signatures (low fp) ---
+
+# "system\0" in upload-progress POST body — forge() plants it at BIN_OFF=200
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 system\\0 payload in upload-progress body";
+  flow:established,to_server;
+  http.request_body;
+  content:"PHP_SESSION_UPLOAD_PROGRESS";
+  content:"system|00|"; fast_pattern;
+  classtype:web-application-attack; sid:9109623; rev:1;)
+
+# IS_STRING_EX (0x106) + IS_OBJECT_EX (0x308) + system\0 — forged zend_fcall_info
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (
+  msg:"PHPUP2026 forged zval struct markers in body";
+  flow:established,to_server;
+  http.request_body;
+  content:"|06 01 00 00|"; fast_pattern;
+  content:"|08 03 00 00|"; within:400;
+  content:"system|00|";
+  classtype:web-application-attack; sid:9109624; rev:1;)
+
+# --- post-exploitation indicators ---
+
+# JACKALPOC canary in response — RCE confirmed; both pocs use this as command output marker
+alert http $HTTP_SERVERS any -> $EXTERNAL_NET any (
+  msg:"PHPUP2026 rce canary JACKALPOC in response";
+  flow:established,to_client;
+  http.response_body; content:"JACKALPOC"; fast_pattern;
+  classtype:web-application-attack; sid:9109625; rev:1;)
+
+# outbound TLS SNI to artifact distribution domain
+alert tls $HTTP_SERVERS any -> any 443 (
+  msg:"PHPUP2026 outbound tls to jackalsyn.com";
+  flow:established,to_server;
+  tls.sni; content:"jackalsyn.com"; fast_pattern;
+  classtype:trojan-activity; sid:9109626; rev:1;)
