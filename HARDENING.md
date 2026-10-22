@@ -227,6 +227,58 @@ is a real coverage gap this repo hasn't closed; `rules/suricata.rules`'s
 duplicate/density signals are the best currently-available mitigation at
 the network layer, with the caveats documented there.
 
+### Block the field/feature at the edge - config snippets for SAPIs
+this guide didn't cover before
+
+2026-10-21: adapted from `eness/php2shell-CVE-2026-109618-CVE-2026-109619-PoC`
+(a public, independently-authored repo - its own claimed RCE mechanism
+and "source patch" do not match the real PHP fix, see `ANALYSIS.md`'s
+"A wrong theory went public," but these config-only snippets work
+regardless of which mechanism theory is correct, since they just stop
+`session.upload_progress`/multipart reaching PHP at all).
+
+**ModSecurity** (any Apache/nginx deployment with the module) - block
+the field directly:
+
+```apache
+SecRequestBodyAccess On
+SecRule ARGS_NAMES "@streq PHP_SESSION_UPLOAD_PROGRESS" \
+    "id:1026109618,phase:2,t:none,deny,status:403,log,\
+    msg:'PHP_SESSION_UPLOAD_PROGRESS field blocked (CVE-2026-109618/109619)'"
+```
+
+**Apache, no ModSecurity** - block multipart POST/PUT/PATCH at
+directories that don't need uploads, via `.htaccess` or a `<Directory>`
+block:
+
+```apache
+RewriteEngine On
+RewriteCond %{REQUEST_METHOD} ^(POST|PUT|PATCH)$ [NC]
+RewriteCond %{HTTP:Content-Type} ^[[:space:]]*multipart/form-data([;,[:space:]]|$) [NC]
+RewriteRule ^ - [F,L]
+```
+
+**Lighttpd** - same idea, Lighttpd config syntax:
+
+```lighttpd
+$HTTP["request-method"] =~ "^(POST|PUT|PATCH)$" {
+    $REQUEST_HEADER["Content-Type"] =~ "(?i)^\s*multipart/form-data([;,[:space:]]|$)" {
+        url.access-deny = ( "" )
+    }
+}
+```
+
+**FrankenPHP** (Caddy-based) - disable the feature globally in the
+Caddyfile, same `php.ini` directive as everywhere else:
+
+```caddyfile
+{
+    frankenphp {
+        php_ini session.upload_progress.enabled 0
+    }
+}
+```
+
 ### Rate-limit multipart POST
 
 ```nginx

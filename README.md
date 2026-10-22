@@ -1,8 +1,9 @@
 # phpup-2026
 
-IOCs and detection rules for **CVE-2026-109618** and **CVE-2026-109619** -
-a single PHP security fix (`php/php-src` commit `82f8f31b16a`, "Avoid
-state corruption via bailout") closing a `longjmp`-based state-corruption
+IOCs and detection rules for **CVE-2026-109618** and **CVE-2026-109619**
+(now also publicly tracked under the name **"php2shell"**) - a single
+PHP security fix (`php/php-src` commit `82f8f31b16a`, "Avoid state
+corruption via bailout") closing a `longjmp`-based state-corruption
 class of bug with two confirmed exploitation chains.
 
 > **2026-10-21 rewrite.** This repo previously described a single-request,
@@ -50,7 +51,11 @@ backports exist for 7.4/8.0/8.1; the 8.0 backport disables the
 the full fix - some distros/LTS vendors backport further, check with
 your vendor).
 
-- Fix commit: `php/php-src` `82f8f31b16a`, branch `PHP-8.0-CVE-2026-109618-109619`
+- Fix commit: `php/php-src` `82f8f31b16a` (the PHP-8.0 EOL backport branch
+  specifically - see `ANALYSIS.md` for why this matters: that branch's
+  `ext/session/session.c` change is a one-line permanent disable, not
+  representative of the materially more extensive fix on supported
+  branches, e.g. `3c832b523ee13b1a010177d2ff84aea18be0015e` on PHP-8.3)
 - [Official advisory](https://www.php.net/archive/2026.php#2026-10-21-5)
 - [CVE-2026-109618 - GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w) ("RCE via OOM corruption" - the `longjmp` removal)
 - [CVE-2026-109619 - GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp) ("RCE via stale global state" - the cross-request consumer half)
@@ -126,3 +131,8 @@ watchTowr independently confirmed CVE-2026-109618.
 VulnCheck: independent review noting public PoCs (including, plausibly,
 the one analyzed here) do not have the correct mechanism - the finding
 that prompted this rewrite.
+NCSC-NL (`github.com/NCSC-NL/php2shell`): independent operational
+advisory, citing CERT-EU Security Advisory 2026-018, whose mechanism
+description corroborates this repo's `ANALYSIS.md` almost word for
+word - including that mod_php is the highest-risk SAPI, matching this
+repo's own lab-tested finding.

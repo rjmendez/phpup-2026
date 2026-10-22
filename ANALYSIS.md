@@ -17,6 +17,58 @@
 
 ---
 
+## A wrong theory went public, under the name "php2shell"
+
+2026-10-21, same day as the above: these CVEs are now publicly and
+widely tracked under the name **"php2shell"** - searched GitHub
+directly (web search had no index coverage yet) and found over a
+dozen repos using that name, several specifically for CVE-2026-109618/
+CVE-2026-109619, with real activity and real star counts, e.g.
+`eness/php2shell-CVE-2026-109618-CVE-2026-109619-PoC` (605 stars,
+created the same day). Two things worth recording:
+
+- **An authoritative, independent source corroborates this file's
+  mechanism almost word-for-word.** `NCSC-NL/php2shell` (the Dutch
+  national CSIRT, citing CERT-EU Security Advisory 2026-018) describes
+  CVE-2026-109618 as "RCE via out-of-memory corruption during request
+  cleanup" and CVE-2026-109619 as "stale request-owned global state
+  reused by a later request on the same worker" - matching this file's
+  "Root cause"/"cross-request half" sections, not the artifact's
+  original spray theory. It also states PHP "considers the risk
+  highest for mod_php, where an unauthenticated request can trigger
+  exploitation before application code runs" - independently
+  corroborating this repo's own lab-tested finding (see "What we have
+  NOT reproduced" below) that php-fpm's worker-recycling-on-fatal
+  behavior is an incidental mitigation Apache's mod_php lacks.
+- **A popular public repo is propagating the same wrong mechanism
+  theory this file already retired, plus a non-canonical "fix" that
+  doesn't match what PHP shipped.** `eness/php2shell-CVE-2026-109618-
+  CVE-2026-109619-PoC`'s README describes the root cause as raw
+  `zval *` bucket pointers in `ext/session/session.c` becoming
+  dangling via `zend_hash_update()`/`zval_ptr_dtor`, then reclaimed and
+  redirected to a crafted `zend_fcall_info` - this is the same
+  mechanism as the leaked PoC artifact this file's prior revision was
+  built on and already retired (see the callout above). Its linked
+  "source code patch" claims PHP's fix "stores counters as direct
+  `zend_long` primitives" via a new
+  `php_session_rfc1867_sync_counters()` function - checked this
+  directly against the real supported-branch commit
+  (`3c832b523ee13b1a010177d2ff84aea18be0015e`) and **no such function
+  exists in the actual fix**; see the corrected
+  `php_session_rfc1867_callback` entry below for what the real fix
+  does instead. Not calling this out to score a point against another
+  researcher - calling it out because a 605-star public repo is the
+  kind of thing a defender or the next PoC author copies from, and
+  copying it would mean building detection/mitigation around a
+  mechanism that was already shown not to reproduce in this repo's own
+  lab (the stall-no-crash capture), plus a patch that was never
+  actually shipped.
+- The repo's **mitigation config snippets are genuinely useful and
+  mechanism-independent** (disabling `session.upload_progress` works
+  regardless of which theory of the RCE primitive is correct) - see
+  `HARDENING.md` for the Lighttpd/FrankenPHP/ModSecurity/Apache
+  material adapted from there, credited.
+
 ## Root cause: a `longjmp` that skips cleanup
 
 PHP's internal allocator (`zend_mm_safe_error`, `Zend/zend_alloc.c`)
@@ -82,13 +134,61 @@ before `init_executor()`/`php_request_startup()` resets the above:
   certain INI diagnostics applied very early (e.g. `.htaccess`/
   `php_value` under mod_php).
 - **`php_session_rfc1867_callback`** - the `session.upload_progress`
-  multipart hook (`ext/session/session.c`). Confirmed by this fix's own
-  EOL-branch handling: PHP 8.0 doesn't get the full fix backported, only
-  a one-line "minimal mitigation" -
-  `if (!PS(rfc1867_enabled) || true) { return retval; }` - the `|| true`
-  permanently disables the function. That's the PHP security team saying
-  "we can't fix this old branch properly, so turn the consumer off,"
-  which is as direct a confirmation as this file gets.
+  multipart hook (`ext/session/session.c`).
+
+  **2026-10-21, correction (caught cross-checking a third-party public
+  repo's claims, see "A wrong theory went public" below): `82f8f31b16a`
+  is specifically the branch-name-labeled 8.0 EOL backport commit, not
+  representative of what landed on supported branches (8.2-8.5). This
+  file previously described its one-line `ext/session/session.c` change
+  (`if (!PS(rfc1867_enabled) || true) { return retval; }`, permanently
+  disabling the function) as "the EOL branch's minimal mitigation,
+  unlike the full fix elsewhere" - checked the actual supported-branch
+  commit directly (`3c832b523ee13b1a010177d2ff84aea18be0015e`, PHP-8.3,
+  same title) and that framing was wrong: the one-liner *is* what 8.0
+  gets, but the supported-branch fix for this exact file is far more
+  extensive, and reveals a second, distinct vulnerability primitive
+  this file hadn't captured:**
+
+  - A new `PS(in_rfc1867_update)` flag, checked by new
+    `php_session_unserialize_init()`/`php_session_serialize_init()`
+    wrappers that force `incomplete_classes_only` mode on session
+    (de)serialization while set. The added comment states the reason
+    directly: *"The upload progress handler... decodes and re-encodes
+    the session during request startup, before RINIT, when no user
+    code may run. Objects are then kept as `__PHP_Incomplete_Class`: no
+    autoloading, no `unserialize_callback_func`, no `__wakeup()` or
+    `__unserialize()`."* Read the other direction: **before this fix,
+    unserializing session data from inside this pre-RINIT callback ran
+    in normal mode** - autoloading and magic methods live - meaning a
+    session value containing a serialized PHP object could have its
+    `__wakeup()`/`__unserialize()` invoked outside the normal, safe
+    request lifecycle. This is **PHP Object Injection** triggered by
+    `session.upload_progress`, not the allocator-level UAF either this
+    file's prior revision or the public "php2shell" write-ups describe
+    - a materially different RCE primitive from both.
+  - `php_rinit_session_globals()` is now called explicitly inside the
+    callback's `MULTIPART_EVENT_START` handler, with the comment "this
+    runs before RINIT, so we need to clear these early" - direct,
+    file-specific confirmation of the exact cross-request global-state
+    mechanism this whole document is about, for the session subsystem
+    specifically (independent of the `EG`/`PG`/`SG` globals table
+    above).
+  - `php_session_initialize()`'s return value is now checked
+    (`== FAILURE`) before proceeding, instead of unconditionally
+    forcing `PS(session_status) = php_session_active` - the same
+    "did initialization actually finish" pattern as `fpm_main.c`'s
+    `php_request_startup() == FAILURE` check (see "What we have NOT
+    reproduced" below), applied one layer deeper.
+  - A new guard, `if (PG(modules_activated)) { return retval; }`,
+    specifically to stop this callback from running again once the
+    request has moved past early-init - i.e. an explicit fix for the
+    callback firing in the wrong timing window at all.
+  - At `MULTIPART_EVENT_END`, an explicit
+    `zend_delete_global_variable("_SESSION")` - discards the
+    incomplete-classes-only `$_SESSION` this pre-RINIT path just built,
+    so the request's real, later session initialization doesn't inherit
+    it.
 
 ## Producer: how an attacker reaches the `longjmp`
 

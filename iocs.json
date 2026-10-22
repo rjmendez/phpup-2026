@@ -68,7 +68,7 @@
   },
 
   "this_artifact_only": {
-    "_note": "Literal to the one released PoC (http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz, sha256 0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63). VulnCheck independently reports that none of the public PoCs they reviewed have the correct mechanism for this CVE pair -- treat this artifact's own documented technique as unverified, not as a description of the real vulnerability. These strings remain useful only as blocklist-grade IOCs for that one tool/campaign, same caveat as before.",
+    "_note": "Literal to the one released PoC (http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz, sha256 0c254d547cac650bfbcb2275e30c2083737520a51a0511646f1fbb7ed60a0d63). VulnCheck independently reports that none of the public PoCs they reviewed have the correct mechanism for this CVE pair -- treat this artifact's own documented technique as unverified, not as a description of the real vulnerability. These strings remain useful only as blocklist-grade IOCs for that one tool/campaign, same caveat as before. 2026-10-21 addition: this CVE pair is now publicly tracked under the name 'php2shell' (searched GitHub directly, found a dozen+ repos using that name, several specifically for CVE-2026-109618/109619) -- this artifact and that public name are the same lineage, not coincidence: the credited original researchers (README.md's own byline) include 'Atlas', and this artifact's full framework (bin/php_up_framework.py) defaults its session ID to that same handle (sid = 'atlas' + 24 random hex chars) when --sid is not overridden. See ANALYSIS.md's 'A wrong theory went public' for why NOT to trust the mechanism description in most public php2shell repos, which repeat this artifact's own (already-retired) theory.",
     "network": {
       "domains": ["jackalsyn.com"],
       "urls": ["http://jackalsyn.com/posts/phpupAssets/php-up-2026.tar.gz"]
@@ -80,7 +80,28 @@
         "a1b2c3d4e5f6a7b8c9d0e1f2a3",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       ],
+      "sid_prefixes": ["atlas"],
+      "sid_prefix_note": "bin/php_up_framework.py (the artifact's general-purpose tool, distinct from the simplified bin/poc_trigger.py which uses the fixed all-'a' SID above): `sid = a.sid or ('atlas' + uuid.uuid4().hex[:24])` -- a 29-character cookie value with a literal 'atlas' prefix followed by 24 lowercase-hex characters, used whenever an operator runs the tool without passing --sid. Suricata/Sigma: match `PHPSESSID=atlas[0-9a-f]{24}` in the cookie.",
       "canary": "JACKALPOC"
+    },
+    "files": {
+      "_note": "Three real, non-stripped ELF debug shared objects under deltas/, one per target distro (Debian Bookworm, Ubuntu Jammy, Ubuntu Noble), built from lsphp82 8.2.34 (LiteSpeed's PHP 8.2 package) and used by the artifact's --syms symbol-extraction mode. If any of these exact files are found on disk (dropped by an operator running this tool locally, or staged for later use), that is a strong, literal match -- not a behavioral heuristic.",
+      "lsphp82-8.2.34-1-bookworm.zval.debug": {
+        "sha256": "3232d5907c080162ee05aab73f77a3a934cfc22647773a7651a2f08a0fd46eb3",
+        "elf_build_id_sha1": "e4ce4835251f69b5125b72f10fd7a43040b9de04"
+      },
+      "lsphp82-8.2.34-1-jammy.zval.debug": {
+        "sha256": "1b45b92df8b8802e3cad78a46dcc4043989497ce11d49f9f26f3d6c43371ad6d",
+        "elf_build_id_sha1": "d3d0af0bf20b9b75ed6e4938257be3d834588e19"
+      },
+      "lsphp82-8.2.34-1-noble.zval.debug": {
+        "sha256": "0ad6b96ca29ae2e19ec3cab8ac30cad8a6c3d6a6e04ff31fe148c0d74dddf8c1",
+        "elf_build_id_sha1": "bd0a3472a96effd538ccd126f07496df4d8dd2f9"
+      }
+    },
+    "memory_constants": {
+      "_note": "bin/php_up_framework.py's DELTA_CALL_AUTHOR = 0x43EF0, the author's own hardcoded zend_call_function delta, used to derive a default --call address when --dtor is supplied without --call. The file's own comment flags it as 'ONLY valid for Ubuntu php 8.5.4 profile-21' -- an operator targeting any other build must override it, so this constant is a weak signal (absence doesn't mean a different tool; presence in a memory/network capture would mean this exact tool, unmodified, against that one specific build).",
+      "delta_call_author_offset": "0x43EF0"
     }
   }
 }
