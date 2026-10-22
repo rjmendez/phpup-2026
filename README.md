@@ -79,6 +79,7 @@ confirmed trigger/consumer path, not by separate code. `ANALYSIS.md`,
 | `HARDENING.md` | defense-in-depth hardening guide, layered beyond the primary mitigation |
 | `examples/` | sanitized pcap/http/log samples - see `examples/INDEX.md` (all samples from before the mechanism rewrite that depended on the now-retired trigger theory were deleted, not kept; everything currently in this directory is a real capture validated against the current rules - see INDEX.md's per-file verification record) |
 | `scripts/sigma_eval.py` | minimal real Sigma-condition evaluator |
+| `scripts/kql_eval.py` | minimal real KQL-condition evaluator for `rules/sentinel/` (no live Log Analytics workspace available, so this checks logic against real field values instead) |
 
 ## Detection philosophy
 

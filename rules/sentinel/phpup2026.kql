@@ -65,6 +65,29 @@
 // populated - use the SHA1 column when available"; fixed there (see
 // rules/sentinel/analytics-rules/phpup2026-PHPShellSpawn.yaml).
 //
+// 2026-10-21, fourth pass: checked the remaining queries' logic against
+// real field values, the same real-data discipline already applied to
+// Suricata/Sigma/YARA, using scripts/kql_eval.py (no live Log Analytics
+// workspace available, so this verifies logic against real captured
+// data rather than executing live KQL). T1-1 confirmed to match on this
+// repo's own real benign/stall captures (translated to W3CIISLog field
+// names) and correctly reject a constructed no-cookie negative. T3-1
+// confirmed to match on the real shell_exec() capture and - unlike
+// Sigma's process-spawn.yml, which documents the cron-under-www-data
+// case as an expected false positive - correctly does NOT fire on the
+// real cron capture, since this query requires InitiatingProcessFileName
+// to match the parent-process regex with no account-based fallback; an
+// intentional, more conservative design than Sigma's, not a bug. T3-2
+// does share Sigma's cron false positive (has an account-based OR
+// branch), but testing surfaced a real, independent gap: its
+// NewProcessName list was missing "dash"/"zsh"/"ash"/"ncat"/"nmap",
+// present in T3-1's identical-purpose list - a shell invoked directly
+// as /bin/dash, with no "/bin/sh" substring anywhere in CommandLine,
+// would have matched neither clause and been missed entirely. Fixed by
+// syncing the list with T3-1's (and added "ash" to both, matching
+// analytics-rules/phpup2026-PHPShellSpawn.yaml's already-more-complete
+// list, which this file's copies had drifted from).
+//
 // Table coverage (after the third rewrite):
 //   W3CIISLog              IIS web server logs
 //   CommonSecurityLog      WAF / proxy / firewall (CEF)
@@ -122,7 +145,7 @@ CommonSecurityLog
 DeviceProcessEvents
 | where TimeGenerated > ago(1h)
 | where InitiatingProcessFileName matches regex @"(?i)^(php-fpm[\d.]*|php[\d.]*|lsphp[\d]*|apache2|httpd|nginx)$"
-| where FileName in~ ("sh", "bash", "dash", "zsh", "python", "python2", "python3", "perl", "curl", "wget", "nc", "ncat", "nmap")
+| where FileName in~ ("sh", "bash", "dash", "zsh", "ash", "python", "python2", "python3", "perl", "curl", "wget", "nc", "ncat", "nmap")
        or ProcessCommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c", "exec(", "eval(")
 | project TimeGenerated, DeviceName, AccountName,
           InitiatingProcessFileName, InitiatingProcessCommandLine,
@@ -133,11 +156,19 @@ DeviceProcessEvents
 // For environments not running MDE. Requires process creation auditing
 // enabled (Security Policy: Audit Process Creation + command-line in audit).
 // 2026-10-21 fix: same has_any -> exact-match fix as T3-1, same reason.
+// 2026-10-21, later the same day: building a real-data KQL evaluator
+// (scripts/kql_eval.py) and testing it against this repo's own real
+// shell-spawn capture surfaced that NewProcessName's list here was
+// missing "dash"/"zsh"/"ncat"/"nmap", present in T3-1's identical-
+// purpose list - a real gap, not theoretical: a shell invoked directly
+// as /bin/dash (no "/bin/sh" substring anywhere in CommandLine) would
+// have matched neither clause and been missed entirely, confirmed by
+// isolating that exact case. Synced the list with T3-1's.
 SecurityEvent
 | where TimeGenerated > ago(1h)
 | where EventID == 4688
 | where SubjectUserName has_any ("www-data", "apache", "nobody", "lsphp", "iis apppool")
-| where NewProcessName in~ ("sh", "bash", "python", "python3", "curl", "wget", "nc")
+| where NewProcessName in~ ("sh", "bash", "dash", "zsh", "ash", "python", "python2", "python3", "curl", "wget", "nc", "ncat", "nmap")
        or CommandLine has_any ("/bin/sh", "/bin/bash", "bash -i", "python -c")
 | project TimeGenerated, Computer, SubjectUserName,
           ParentProcessName, NewProcessName, CommandLine
