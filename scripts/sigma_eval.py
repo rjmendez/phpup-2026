@@ -164,6 +164,16 @@ if __name__ == "__main__":
     # spot-checked here that none of the three ever match.
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109634}, "sid 9109634 (retired SID, must not match)", expect=False)
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109635}, "sid 9109635 (retired SID, proven false-positive, must not match)", expect=False)
+    # sid 9109637: real, active, live-fire-verified SID (the
+    # php_up_framework tool fingerprint) -- NOT retired, but
+    # deliberately excluded from this rule's selection list, same
+    # reasoning as the retired SIDs produce the same expected result
+    # (no match) for a different reason: this rule's scope is the real
+    # OOM-amplification/bailout mechanism specifically, and 9109637
+    # makes a materially weaker, different claim ("this tool's output
+    # was observed," not "the mechanism fired"). See this YAML's own
+    # description for the full reasoning.
+    all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109637}, "sid 9109637 (real, active, deliberately excluded -- different claim, not retired)", expect=False)
     all_ok &= run_rule(f"{base}/phpup2026-ids-correlation.yml", {"alert.signature_id": 9109636}, "sid 9109636 (retired SID, must not match)", expect=False)
 
     print()

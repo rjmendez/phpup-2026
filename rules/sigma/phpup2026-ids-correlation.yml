@@ -28,6 +28,26 @@ description: |
   rules/suricata.rules with that evidence. Removed from the selection
   list below for the same reason as 9109634.
 
+  2026-10-21, later the same day, checked but not changed: rules/
+  suricata.rules gained a new SID, 9109637, after this file was last
+  edited - a tool fingerprint for `bin/php_up_framework.py`'s forged
+  zend_fcall_info byte layout (live-fire verified against that real
+  framework's own generated traffic, see ANALYSIS.md and
+  examples/INDEX.md). Deliberately NOT added to the selection list
+  below: this rule's title and scope are specifically about the real
+  rfc1867 OOM-amplification/bailout mechanism (9109633), and 9109637
+  makes a materially weaker, different claim - "this specific tool's
+  output was observed," not "the amplification mechanism fired." SID
+  9109637's own comment in suricata.rules draws this exact distinction
+  deliberately (it is the same byte layout retired SID 9109630 was
+  built on, reframed with an honest, narrower claim). Merging it into
+  this selection list would blur that distinction for anyone triaging
+  an alert from this rule specifically - a SOC analyst reading a hit
+  here should be able to trust it means the real mechanism, not "one of
+  several unrelated things, one of which is just a known PoC tool's
+  presence." If a correlation rule for 9109637 specifically is wanted,
+  it should be its own rule, titled accordingly, not folded in here.
+
   2026-10-21, same day, honesty note (not a fix): checked SigmaHQ's own
   repository (github.com/SigmaHQ/sigma) for precedent on this rule's
   `category: ids, product: suricata` logsource and the dotted
