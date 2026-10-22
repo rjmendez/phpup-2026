@@ -341,7 +341,7 @@ any of these log sources).
 
 | Format | File | Notes |
 |--------|------|-------|
-| Suricata 7+ | `rules/suricata.rules` | Feature-presence (9109627) + OOM-amplification signal (9109633, live-fire verified against both real attack captures and a real legitimate multi-file upload) - 9109634/9109635/9109636 retired, see the file's own retired-rules section for why |
+| Suricata 7+ | `rules/suricata.rules` | Feature-presence (9109627) + OOM-amplification signal (9109633) + php_up_framework tool fingerprint (9109637) - all live-fire verified against real attack captures and real legitimate traffic (including a real array-field stress test for 9109637) - 9109634/9109635/9109636 retired, see the file's own retired-rules section for why |
 | YARA 4+ | `rules/yara.yar` | Source/distribution fingerprint only - the old spray-blob rule is retired |
 | Sigma | `rules/sigma/` | Feature-presence, IDS-correlation (maps the new Suricata SIDs), process-spawn |
 | Sentinel KQL | `rules/sentinel/phpup2026.kql` | Feature-presence, process-spawn - the OOM-amplification/hunting queries this once had were retired 2026-10-21 (AzureDiagnostics has no raw-request-body field; not fixable, see the file's header comment) |

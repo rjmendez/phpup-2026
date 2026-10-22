@@ -57,7 +57,32 @@
 # in test coverage. Retired below with the real evidence, same as
 # 9109634/9109636.
 #
-# SID range 9109627, 9109633 (9109628-9109632, 9109634, 9109635, 9109636 retired below)
+# 2026-10-21, later still: this CVE pair is now publicly tracked as
+# "php2shell" (see ANALYSIS.md). Built the artifact's own general-purpose
+# exploitation framework (bin/php_up_framework.py, --build --bug 618) for
+# real, delivered the real 62930-byte generated body to this repo's own
+# lab, and captured it (examples/pcaps is not where this one lives -- see
+# the new rule below instead). Two findings: (1) Suricata's own default
+# libhtp request-body-inspect-window/minimal-inspect-size (4KB/32KB) is
+# too small to reach content past roughly the first 10KB of a large
+# multipart body in some configurations -- confirmed by watching simple
+# literal-string matches silently fail past that offset and succeed once
+# libhtp.default-config.request-body-inspect-window was raised; a rule
+# that targets content deep in a large body needs this configured or it
+# will silently never fire in production, independent of the rule's own
+# correctness. (2) the artifact's forge() byte layout (fixed
+# IS_STRING_EX/IS_OBJECT_EX markers, "system\x00" + command, 149
+# identical copies) is real, stable, and distinctive enough to serve as
+# an honest TOOL fingerprint -- not a vulnerability-confirmation signal,
+# since this exact byte layout is the same one SID 9109630 was built on
+# and retired for (VulnCheck: doesn't match the real mechanism). The
+# difference is the claim: 9109630 claimed "this proves exploitation
+# worked"; the new rule below only claims "this specific tool's output
+# was sent," which remains true even though the tool's own theory of
+# why it should work is wrong. See the new rule's own comment for the
+# real positive/negative test results.
+#
+# SID range 9109627, 9109633, 9109637 (9109628-9109632, 9109634, 9109635, 9109636 retired below)
 
 # --- feature-presence / policy (low severity, high recall) ---
 
@@ -93,6 +118,43 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 session.upload
 # ever crossing from one legitimate part's Content-Disposition into
 # another's, independent of file count or content size.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 duplicate header name in one multipart part (OOM-amplification attempt)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; pcre:"/\x0d\x0a([\x21-\x39\x3b-\x7e]+):[ \t]?[^\x0d\x0a]*(?:\x0d\x0a(?!\x0d\x0a)(?!\1:)[^\x0d\x0a]*){0,20}\x0d\x0a\1:/"; classtype:web-application-attack; sid:9109633; rev:3;)
+
+# --- tool fingerprint, NOT a vulnerability-confirmation signal ---
+#
+# Detects the specific byte layout `bin/php_up_framework.py` (this CVE
+# pair's public "php2shell" exploitation framework) generates by
+# default: 149 copies of a 288-byte forged zend_fcall_info/zval
+# structure, each containing fixed IS_STRING_EX (0x106) and IS_OBJECT_EX
+# (0x308) 32-bit markers plus a planted "system\x00<command>" string,
+# delivered as identically-named "t[]" multipart fields. This is the
+# SAME byte layout retired SID 9109630 was built on - the difference is
+# the claim, not the bytes. 9109630 claimed this byte layout proved
+# successful exploitation, which VulnCheck's review and this repo's own
+# lab testing (see ANALYSIS.md) both contradict. This rule claims only
+# that this specific tool's generated output was observed on the wire -
+# true regardless of whether the tool's own exploitation theory is
+# correct, the same distinction already established for this repo's
+# disk-based YARA rules (`rules/yara.yar`'s phpup2026_source/
+# phpup2026_distribution).
+#
+# 2026-10-21: live-fire tested, real positive and negative cases, not
+# reasoned about. Positive: built the real framework (`php_up_framework.py
+# --build --bug 618`), delivered the real 62930-byte generated body to
+# this repo's own lab, captured it, and confirmed this rule fires.
+# Negative: confirmed zero false positives against all five existing
+# real captures in examples/pcaps/ (including the real, different-
+# mechanism OOM-amplification capture - this rule correctly does not
+# confuse the two techniques), AND against a newly built, genuinely
+# legitimate stress test this rule's design specifically needed to
+# survive: a real 20-field multi-select array submission using the
+# exact same field name, `t[]=tag_1` through `t[]=tag_20` - zero alerts,
+# because the byte markers (not the field name or occurrence count
+# alone) are what this rule actually keys on. Required raising
+# libhtp.default-config.request-body-inspect-window above its small
+# default to reach the markers at all in a 62KB body - see this file's
+# header comment for why, and set it accordingly in your own deployment
+# before relying on this rule.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"PHPUP2026 php_up_framework tool fingerprint (forged zend_fcall_info spray byte layout - confirms this tool's output, not exploitation)"; flow:established,to_server; http.method; content:"POST"; http.header; content:"multipart/form-data"; nocase; http.request_body; content:"system|00|"; fast_pattern; content:"|06 01 00 00|"; distance:0; content:"|08 03 00 00|"; distance:0; content:"name=|22|t[]|22|"; distance:0; content:"name=|22|t[]|22|"; distance:0; classtype:web-application-attack; sid:9109637; rev:1;)
 
 # 9109634 (density proxy, "3+ occurrences") retired 2026-10-21: an
 # attempted extension of the 9109633 pattern to require a third
