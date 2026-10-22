@@ -12,11 +12,30 @@ description: |
   Standard web-server access logs (W3C/IIS, nginx/Apache combined format)
   do not capture POST body field names, so this cannot directly confirm
   the PHP_SESSION_UPLOAD_PROGRESS field name itself -- it is a
-  method+content-type+cookie structural proxy, not a payload match. (An
-  earlier revision of this rule had a `cs-bytes|contains:
+  method+cookie structural proxy, not a payload match. (An earlier
+  revision of this rule had a `cs-bytes|contains:
   'PHP_SESSION_UPLOAD_PROGRESS'` clause checking a numeric byte-count
   field for a string; confirmed via a real Sigma-condition evaluator
   against real captured events that this could never match, and removed.)
+
+  2026-10-21, second fix: this rule also had a `cs-headers|contains:
+  'multipart/form-data'` clause. Checked against SigmaHQ's own
+  repository (github.com/SigmaHQ/sigma): `cs-method` and `cs-cookie` are
+  real, established field names for `category: webserver` (used in
+  real merged rules and SigmaHQ's own field-name test fixtures), but
+  `cs-headers` returns zero hits anywhere in that repo -- not a real
+  Sigma field for this category, the same invented-field mistake already
+  caught in this repo's Azure Sentinel content (AzureDiagnostics'
+  `requestBody_s`, W3CIISLog's `csHeaders`). Worse here than there:
+  because the rule's condition was `all of selection_*`, a selection
+  keyed on a field that never exists in real data made the ENTIRE rule
+  permanently unable to fire, not just weaker. Standard web-server
+  access logging (the thing `category: webserver` actually models) does
+  not capture request headers like Content-Type at all, the same root
+  cause as W3CIISLog's missing `csHeaders` -- there is no field to
+  rename this to. Removed the clause; this rule can no longer
+  distinguish a multipart POST from any other POST with the same
+  cookie, same honest trade-off already made for the Sentinel version.
 references:
   - https://github.com/rjmendez/phpup-2026
 tags:
@@ -27,8 +46,6 @@ logsource:
 detection:
   selection_method:
     cs-method: 'POST'
-  selection_ct:
-    cs-headers|contains: 'multipart/form-data'
   selection_cookie:
     cs-cookie|contains: 'PHPSESSID='
   condition: all of selection_*

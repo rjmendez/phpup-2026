@@ -2,9 +2,10 @@
 """Minimal real Sigma-condition evaluator for rules/sigma/*.yml.
 
 Not a general-purpose Sigma engine -- only handles what this repo's 3
-rules actually use: |contains / |gte field modifiers, plain-equality
-list matching (for alert.signature_id), and conditions of the shape
-"all of selection_*" or "(a or b) and c". No aggregations/correlation.
+rules actually use: |contains / |gte / |re / |endswith field modifiers,
+plain-equality list matching (for alert.signature_id), and conditions
+of the shape "all of selection_*" or "(a or b) and c". No
+aggregations/correlation.
 
 2026-10-21 rewrite: the prior revision of this script tested a 4th rule,
 phpup2026-upload-pattern.yml, and the old retired Suricata SIDs
@@ -38,6 +39,12 @@ def match_value(event_val, cond_val, modifier):
             return float(event_val) >= float(cond_val)
         except (TypeError, ValueError):
             return False
+    if modifier == "re":
+        return re.search(cond_val, s) is not None
+    if modifier == "endswith":
+        if isinstance(cond_val, list):
+            return any(s.endswith(str(v)) for v in cond_val)
+        return s.endswith(str(cond_val))
     # plain equality (used for alert.signature_id list and cs-method)
     if isinstance(cond_val, list):
         return event_val in cond_val or str(event_val) in [str(v) for v in cond_val]
@@ -110,15 +117,27 @@ if __name__ == "__main__":
 
     print("\n=== process-spawn (4b9d2e51) ===")
     # Real capture: examples/logs/phpup2026-sysmonlinux-shell-spawn.log
+    # (ParentImage included too -- the same real log line has both fields)
     shell_spawn_real = {"User": "www-data", "ParentCommandLine": "php-fpm: pool www",
+                         "ParentImage": "/usr/sbin/php-fpm8.3",
                          "CommandLine": '/bin/sh -c "id; whoami; sleep 1.5"'}
     # Real capture: examples/logs/phpup2026-sysmonlinux-benign-cron-fp.log
     # -- documented, confirmed-live false positive (cron, not php-fpm, but
     # selection_user+selection_cmd still match on their own).
     cron_fp_real = {"User": "www-data", "ParentCommandLine": "/usr/sbin/cron -f -P",
+                     "ParentImage": "/usr/sbin/cron",
                      "CommandLine": "/bin/sh -c /opt/app/bin/nightly-backup.sh"}
     all_ok &= run_rule(f"{base}/phpup2026-process-spawn.yml", shell_spawn_real, "real shell_exec() spawn", expect=True)
     all_ok &= run_rule(f"{base}/phpup2026-process-spawn.yml", cron_fp_real, "real cron FP (documented)", expect=True)
+    # Isolate the new selection_parent_image check specifically: real
+    # ParentImage (/usr/sbin/php-fpm8.3, versioned binary name) with NO
+    # ParentCommandLine match and NO User match, to confirm the |re
+    # pattern alone (not falling through to the other two selections)
+    # correctly handles the version suffix against real data.
+    parent_image_only_real = {"User": "someotheruser", "ParentCommandLine": "--daemonize --allow-to-run-as-root",
+                               "ParentImage": "/usr/sbin/php-fpm8.3",
+                               "CommandLine": "/bin/sh -c id"}
+    all_ok &= run_rule(f"{base}/phpup2026-process-spawn.yml", parent_image_only_real, "real ParentImage (versioned php-fpm8.3), isolating selection_parent_image", expect=True)
 
     print("\n=== ids-correlation (6a2f8d14) ===")
     # Each Suricata alert is its own event (one signature_id each) -- a

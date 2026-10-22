@@ -10,6 +10,28 @@ description: |
   against the real fix (php/php-src commit 82f8f31b16a); see ANALYSIS.md.
   The rule's value as a post-exploitation indicator doesn't depend on
   which mechanism caused the RCE.
+
+  2026-10-21, second fix: checked this rule's field names against
+  SigmaHQ's own repository (github.com/SigmaHQ/sigma). `CommandLine` and
+  `ParentCommandLine` are both real and used in a directly analogous
+  real merged rule (rules/linux/process_creation/
+  proc_creation_lnx_webshell_detection.yml, "Linux Webshell Indicators"),
+  but that rule keys its parent-process check on `ParentImage|endswith`
+  (the full executable path, e.g. '/httpd', '/apache2', '/nginx'), not
+  `ParentCommandLine|contains`. Added `ParentImage|endswith` here too,
+  as the more precise, better-precedented check, alongside the existing
+  `ParentCommandLine` check rather than replacing it: this repo's own
+  real capture (examples/logs/phpup2026-sysmonlinux-shell-spawn.log) has
+  `ParentImage: /usr/sbin/php-fpm8.3` alongside `ParentCommandLine:
+  php-fpm: pool www`, so both are confirmed populated for php-fpm, and
+  keeping `ParentCommandLine|contains: 'php-fpm'` as a fallback costs
+  nothing. `User` has no real precedent in SigmaHQ's own Linux
+  process_creation corpus (searched: zero hits with any modifier outside
+  two unrelated rules) - most Linux collectors feeding this category are
+  auditd-based and don't commonly populate or filter on it - but it is a
+  real field in Sysmon-for-Linux's own schema, which is what this
+  repo's own real capture above was built against; kept as-is, not
+  proven wrong, just less commonly relied on elsewhere.
 references:
   - https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
   - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
@@ -33,6 +55,8 @@ detection:
     ParentCommandLine|contains:
       - 'php-fpm'
       - 'lsphp'
+  selection_parent_image:
+    ParentImage|re: '.*/(php-fpm[0-9.]*|lsphp[0-9]*|apache2|httpd)$'
   selection_cmd:
     CommandLine|contains:
       - '/bin/sh'
@@ -42,7 +66,7 @@ detection:
       - 'wget '
       - 'nc '
       - 'bash -i'
-  condition: (selection_user or selection_parent) and selection_cmd
+  condition: (selection_user or selection_parent or selection_parent_image) and selection_cmd
 falsepositives:
   - cron jobs running as www-data - suppress known-good parent commands
 level: high

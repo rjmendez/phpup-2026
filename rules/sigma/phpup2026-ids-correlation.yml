@@ -27,6 +27,21 @@ description: |
   phpup2026-real-legit-multifile-benign.pcap) and retired in
   rules/suricata.rules with that evidence. Removed from the selection
   list below for the same reason as 9109634.
+
+  2026-10-21, same day, honesty note (not a fix): checked SigmaHQ's own
+  repository (github.com/SigmaHQ/sigma) for precedent on this rule's
+  `category: ids, product: suricata` logsource and the dotted
+  `alert.signature_id` field path - found zero hits for either
+  "product: suricata" or "category: ids" anywhere in that repo. There
+  is no established SigmaHQ community convention for consuming Suricata
+  EVE JSON via Sigma at all; this logsource/field combination is this
+  repo's own ad-hoc choice, not a validated taxonomy. That said, the
+  field itself is real and verified the strongest way available here:
+  directly observed, repeatedly, in this repo's own genuine EVE JSON
+  captures throughout this investigation (examples/logs/
+  phpup2026-eve-*.json all use this exact `{"alert":{"signature_id":
+  ...}}` structure) - stronger evidence than documentation, just not
+  backed by SigmaHQ precedent the way the other two rules' fields are.
 references:
   - https://github.com/rjmendez/phpup-2026
 tags:
